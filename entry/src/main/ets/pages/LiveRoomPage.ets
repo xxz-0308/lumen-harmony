@@ -87,6 +87,7 @@ export struct LiveRoomPage {
   @Local morphPixel: image.PixelMap | null = null;
   private videoXc: XComponentController | null = null;
   private backIssued: boolean = false;
+  private backCaptureTimer: number = -1;
   @Local sleepInput: string = '';
   @Local sleepMinutes: number = 0;
   @Local sleepRemaining: number = 0;
@@ -109,6 +110,7 @@ export struct LiveRoomPage {
   private pipSupported: boolean = LivePip.supported();
   /** While going to the background with auto PiP armed, give the PiP window time to appear. */
   private pipGraceTimer: number = -1;
+  private pipCloseTimer: number = -1;
   private pip: LivePip = new LivePip({
     play: () => {
       this.pausedByBackground = false;
@@ -116,6 +118,8 @@ export struct LiveRoomPage {
     },
     pause: () => this.pausePlayback(),
     onActive: (active: boolean, restoring: boolean) => {
+      if (this.disposed) return;
+      this.clearPipCloseCheck();
       this.pipActive = active;
       if (active && this.pausedByBackground) {
         this.pausedByBackground = false;
@@ -124,8 +128,9 @@ export struct LiveRoomPage {
       if (!active && !restoring && !this.env.foreground) {
         // The PiP window was closed while the app stays in the background. Opening the app from
         // its icon can also stop PiP just before the foreground event, so check again shortly.
-        setTimeout(() => {
-          if (!this.pipActive && !this.env.foreground) {
+        this.pipCloseTimer = setTimeout(() => {
+          this.pipCloseTimer = -1;
+          if (!this.disposed && !this.pipActive && !this.env.foreground) {
             this.pauseForBackground();
           }
         }, 500);
@@ -144,6 +149,7 @@ export struct LiveRoomPage {
   }
 
   aboutToAppear(): void {
+    if (this.disposed) return;
     this.env.subscribeForeground(this.foregroundListener);
     this.syncSettings();
     // The cover must be available before the destination's first transition frame.
@@ -151,6 +157,7 @@ export struct LiveRoomPage {
   }
 
   onReady(ctx: NavDestinationContext): void {
+    if (this.disposed) return;
     const p = ctx.pathInfo.param as LiveRouteParam;
     Log.i('page', `live onReady ${p.siteId} room=${p.roomId}`);
     this.sourceRoomKey = `${p.siteId}_${p.roomId}`;
@@ -184,7 +191,10 @@ export struct LiveRoomPage {
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
     this.env.unsubscribeForeground(this.foregroundListener);
+    this.clearPipCloseCheck();
+    this.clearBackCapture();
     this.pip.dispose();
+    this.videoXc = null;
     this.clearPipGrace();
     BackgroundAudio.detach(this.audioOwner);
     this.model.dispose();
@@ -205,6 +215,7 @@ export struct LiveRoomPage {
   }
 
   private onForeground(): void {
+    if (this.disposed) return;
     if (this.sleepExpired) {
       this.finishSleep();
       return;
@@ -224,6 +235,7 @@ export struct LiveRoomPage {
       }
     } else {
       this.clearPipGrace();
+      this.clearPipCloseCheck();
       if (this.pausedByBackground) {
         this.pausedByBackground = false;
         this.model.resume();
@@ -233,6 +245,7 @@ export struct LiveRoomPage {
   }
 
   private pausePlayback(): void {
+    if (this.disposed) return;
     this.model.player.pause();
     // Playback intent changes before native paused arrives; release AVSession/task now.
     this.onPlayState();
@@ -240,6 +253,7 @@ export struct LiveRoomPage {
 
   @Monitor('model.player.state', 'settings.leaveBehavior')
   onPlayState(): void {
+    if (this.disposed) return;
     const state = this.model.player.state;
     Log.i('page', `play state=${state} foreground=${this.env.foreground} mode=${this.leaveBehavior}`);
     const active = this.model.player.wantsPlayback &&
@@ -275,6 +289,7 @@ export struct LiveRoomPage {
 
   /** Pauses a stream that must not keep playing while the app is hidden. */
   private pauseForBackground(): void {
+    if (this.disposed) return;
     if (this.env.foreground || this.leaveBehavior === 'audio' || this.pipActive) {
       return;
     }
@@ -287,13 +302,13 @@ export struct LiveRoomPage {
   }
 
   private armPipGrace(): void {
-    if (this.env.foreground || this.pipActive || this.pipGraceTimer >= 0 ||
+    if (this.disposed || this.env.foreground || this.pipActive || this.pipGraceTimer >= 0 ||
       !this.model.player.wantsPlayback) {
       return;
     }
     this.pipGraceTimer = setTimeout(() => {
       this.pipGraceTimer = -1;
-      if (!this.env.foreground && !this.pipActive) {
+      if (!this.disposed && !this.env.foreground && !this.pipActive) {
         this.pauseForBackground();
       }
     }, 2000);
@@ -306,14 +321,22 @@ export struct LiveRoomPage {
     }
   }
 
+  private clearPipCloseCheck(): void {
+    if (this.pipCloseTimer >= 0) {
+      clearTimeout(this.pipCloseTimer);
+      this.pipCloseTimer = -1;
+    }
+  }
+
   private startPip(): void {
     this.pip.start().catch(() => {
-      promptAction.showToast({ message: '画中画暂不可用' });
+      if (!this.disposed) promptAction.showToast({ message: '画中画暂不可用' });
     });
   }
 
   @Monitor('model.player.videoWidth', 'model.player.videoHeight')
   onVideoSize(): void {
+    if (this.disposed) return;
     this.pip.setContentSize(this.model.player.videoWidth, this.model.player.videoHeight);
   }
 
@@ -332,6 +355,7 @@ export struct LiveRoomPage {
 
   @Monitor('model.latestSc')
   onSc(): void {
+    if (this.disposed) return;
     const sc = this.model.latestSc;
     if (sc === null || !this.fullscreen) {
       return;
@@ -363,6 +387,7 @@ export struct LiveRoomPage {
 
   @Monitor('panelOpen', 'drawerOpen', 'rootW', 'fullscreen')
   onPanelVisibility(): void {
+    if (this.disposed) return;
     if (this.panelHideTimer >= 0) {
       clearTimeout(this.panelHideTimer);
       this.panelHideTimer = -1;
@@ -426,6 +451,7 @@ export struct LiveRoomPage {
   }
 
   private armHide(): void {
+    if (this.disposed) return;
     clearTimeout(this.hideTimer);
     this.hideTimer = setTimeout(() => {
       if (this.sheet === '' && this.model.player.state === PlayState.Playing) {
@@ -492,6 +518,7 @@ export struct LiveRoomPage {
   }
 
   private showHud(kind: string, v: number): void {
+    if (this.disposed) return;
     this.hud = kind;
     this.hudValue = v;
     clearTimeout(this.hudTimer);
@@ -501,6 +528,7 @@ export struct LiveRoomPage {
   }
 
   private setSleep(minutes: number): void {
+    if (this.disposed) return;
     if (this.sleepTimer >= 0) {
       clearInterval(this.sleepTimer);
       this.sleepTimer = -1;
@@ -515,6 +543,7 @@ export struct LiveRoomPage {
   }
 
   private finishSleep(): void {
+    if (this.disposed) return;
     if (!this.sleepPopIssued) {
       this.sleepPopIssued = true;
       Nav.stack.pop();
@@ -526,6 +555,7 @@ export struct LiveRoomPage {
   }
 
   private tickSleep(): void {
+    if (this.disposed) return;
     if (this.sleepDeadline === 0 || this.sleepExpired) {
       return;
     }
@@ -591,15 +621,17 @@ export struct LiveRoomPage {
   }
 
   private goBack(): void {
-    if (this.exiting) return;
+    if (this.exiting || this.disposed) return;
     this.exiting = true;
     // Shrink the picture the viewer was actually watching, not the stale card thumbnail. The grab
     // is short and bounded; a slow or failed one falls back to the cover.
-    const leave = (): void => this.fadeBack();
-    const timer = setTimeout(leave, 150);
+    this.backCaptureTimer = setTimeout(() => {
+      this.backCaptureTimer = -1;
+      this.fadeBack();
+    }, 150);
     this.captureLastFrame().then(() => {
-      clearTimeout(timer);
-      leave();
+      this.clearBackCapture();
+      this.fadeBack();
     });
   }
 
@@ -628,8 +660,15 @@ export struct LiveRoomPage {
     }
   }
 
+  private clearBackCapture(): void {
+    if (this.backCaptureTimer >= 0) {
+      clearTimeout(this.backCaptureTimer);
+      this.backCaptureTimer = -1;
+    }
+  }
+
   private fadeBack(): void {
-    if (this.sleepPopIssued || this.backIssued) return;
+    if (this.disposed || this.sleepPopIssued || this.backIssued) return;
     this.backIssued = true;
     // The destination's customTransition morphs the picture back into its card.
     Nav.stack.pop(true);
@@ -979,6 +1018,7 @@ export struct LiveRoomPage {
         styleVersion: this.danmakuStyleVersion,
         cornerRadius: this.fullscreen ? 0 : Radius.xl,
         onSurface: (xc: XComponentController) => {
+          if (this.disposed) return;
           this.videoXc = xc;
           this.pip.attach(AppEnv.inst.context, xc, Nav.id);
         }

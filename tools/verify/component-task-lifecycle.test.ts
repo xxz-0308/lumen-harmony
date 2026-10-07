@@ -1,0 +1,162 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { transform } from 'esbuild';
+
+// Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
+// build and device smoke run, not by this fixture. No application method is reimplemented here.
+async function logicStruct(file: string, name: string, end: string, mocks: Record<string, unknown>): Promise<any> {
+  const src = readFileSync(new URL(file, import.meta.url), 'utf-8');
+  const marker = `export struct ${name} {`;
+  const start = src.indexOf(marker) + marker.length;
+  assert.ok(start >= marker.length);
+  let body = src.slice(start, src.indexOf(end, start));
+  body = body.replace(/^\s*@(Param|Local)\s+/gm, '\n  ')
+    .replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n');
+  const constants = (src.match(/^const (INFO_H|GAP): number = \d+;/gm) ?? []).join('\n');
+  const key = `__fixture_${name}`;
+  (globalThis as any)[key] = mocks;
+  const code = `const {${Object.keys(mocks).join(',')}} = globalThis.${key};\n${constants}\nexport class ${name} {${body}\n}`;
+  const out = await transform(code, { loader: 'ts', target: 'es2022', format: 'esm' });
+  return (await import(`data:text/javascript,${encodeURIComponent(out.code)}`))[name];
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+class Clock {
+  now = 0; id = 0;
+  jobs = new Map<number, { at: number; fn: () => void; period: number }>();
+  timeout = (fn: () => void, delay: number) => this.add(fn, delay, 0);
+  interval = (fn: () => void, delay: number) => this.add(fn, delay, delay);
+  clear = (id: number) => { this.jobs.delete(id); };
+  add(fn: () => void, delay: number, period: number) {
+    const id = ++this.id; this.jobs.set(id, { at: this.now + delay, fn, period }); return id;
+  }
+  advance(delay: number) {
+    const end = this.now + delay;
+    while (true) {
+      const next = [...this.jobs].filter(([, j]) => j.at <= end).sort((a,b) => a[1].at-b[1].at)[0];
+      if (!next) break;
+      const [id, job] = next; this.now = job.at;
+      if (job.period) job.at += job.period; else this.jobs.delete(id);
+      job.fn();
+    }
+    this.now = end;
+  }
+}
+const clock = new Clock();
+const originalTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
+Object.assign(globalThis, { setTimeout: clock.timeout, setInterval: clock.interval, clearTimeout: clock.clear, clearInterval: clock.clear });
+const effects: string[] = [];
+let pops = 0, capture = deferred<any>(), pipStart = deferred<void>();
+const settings = { danmakuOn:true, sideChat:true, videoFill:false, theaterPanelOpen:true, volumeMode:'app', appVolume:1, leaveBehavior:'pip' };
+const env: any = {
+  winWidth:1200, winHeight:800, statusBarHeight:20, navBarHeight:20, reduceMotion:false, foreground:false,
+  subscribeForeground:()=>effects.push('subscribe'), unsubscribeForeground:()=>effects.push('unsubscribe'),
+  setKeepScreenOn:()=>effects.push('screen'), setBrightness:()=>effects.push('brightness'),
+  setImmersive:()=>{}, setLandscape:()=>{}
+};
+class Model {
+  siteId='huya'; roomId='1'; preview=null; disposals=0;
+  player={ firstFrame:true, state:2, wantsPlayback:true, pause:()=>{}, setVolume:()=>{} };
+  dispose(){ this.disposals++; this.player.state=0; }
+}
+class Pip {
+  static supported(){ return true; }
+  constructor(public handlers:any){}
+  dispose(){ effects.push('pip-dispose'); }
+  setContentSize(){ effects.push('pip-size'); }
+  setPlaying(){ effects.push('pip-playing'); }
+  setAutoStart(){ effects.push('pip-auto'); }
+  start(){ return pipStart.promise; }
+}
+class Route { coverW=300; coverH=169; coverX=20; coverY=30; preview=null; }
+try {
+  const Page = await logicStruct('../../../entry/src/main/ets/pages/LiveRoomPage.ets', 'LiveRoomPage', '  // ---------- builders ----------', {
+    RoomModel:Model, AppEnv:{inst:env}, Settings:{inst:settings}, LivePip:Pip, LiveRouteParam:Route,
+    BackgroundAudio:{detach:()=>effects.push('detach'), setMetadata:()=>effects.push('metadata'), update:()=>effects.push('audio')},
+    Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}},
+    image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
+    PlayState:{Idle:0,Playing:2,Buffering:4,Error:5}, NavigationOperation:{PUSH:1,POP:2},
+    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2},
+    isNarrowTheater:(w:number)=>w<900, showTheaterPanel:()=>true
+  });
+  const fresh = () => {
+    const p = new Page();
+    p.sourceRoomKey='huya_1';
+    p.videoXc={getXComponentSurfaceRect:()=>({surfaceWidth:320,surfaceHeight:180}),getXComponentSurfaceId:()=> 'surface'};
+    return p;
+  };
+  let p=fresh(), pauses=0;
+  p.pauseForBackground=()=>pauses++;
+  p.pip.handlers.onActive(false,false);
+  assert.equal(clock.jobs.size,1);
+  clock.advance(500);
+  assert.equal(pauses,1,'an active background room retains the PiP-close grace check');
+  p.pip.handlers.onActive(false,false);
+  p.disposeRoom('navigation');
+  const count=effects.length;
+  clock.advance(3000);
+  p.pip.handlers.onActive(true,false);
+  p.onForeground(); p.onPlayState(); p.onVideoSize(); p.onPanelVisibility(); p.armHide(); p.showHud('volume',0.5); p.setSleep(1); p.tickSleep(); p.finishSleep();
+  assert.equal(effects.length,count,'disposed rooms cannot update system playback/window state');
+  assert.equal(clock.jobs.size,0,'dispose cancels owned checks and blocks rescheduling');
+  assert.equal(p.pipActive,false);
+  p.disposeRoom('component');
+  assert.equal(p.model.disposals,1,'PiP-cached navigation disposal is idempotent');
+
+  p=fresh(); capture=deferred<any>(); let releases=0;
+  p.goBack(); assert.equal(clock.jobs.size,1);
+  p.disposeRoom('navigation');
+  assert.equal(p.videoXc,null);
+  capture.resolve({release:()=>releases++}); await flush(); clock.advance(500);
+  assert.equal(pops,0,'a stale screenshot completion cannot pop the next room');
+  assert.equal(releases,1,'a screenshot produced after disposal is released');
+  assert.equal(clock.jobs.size,0);
+
+  p=fresh(); capture=deferred<any>(); const pixel={release:()=>releases++};
+  p.goBack(); capture.resolve(pixel); await flush();
+  assert.equal(pops,1); assert.equal(clock.jobs.size,0);
+  p.disposeRoom('navigation');
+  assert.equal(p.morphPixel,pixel,'resource cleanup preserves the visible return snapshot');
+  const transition=p.roomTransition(2,false);
+  assert.equal(p.morphOn,true,'return animation still runs after willDisappear cleanup');
+  transition[0].onTransitionEnd();
+  assert.equal(p.morphPixel,null);
+
+  p=fresh(); capture=deferred<any>(); p.goBack(); clock.advance(150);
+  assert.equal(pops,2,'slow screenshots retain the original 150ms return deadline');
+  capture.resolve({release:()=>releases++}); await flush();
+  assert.equal(pops,2,'a late screenshot does not issue a second pop');
+  p.disposeRoom('component');
+  p=fresh(); pipStart=deferred<void>(); p.startPip(); p.disposeRoom('component');
+  const toasts=effects.filter(e=>e==='toast').length;
+  pipStart.reject(new Error('late failure')); await flush();
+  assert.equal(effects.filter(e=>e==='toast').length,toasts);
+
+  const tasks=new Map<string,ReturnType<typeof deferred<any>>>();
+  const loads:string[]=[];
+  const ImageView=await logicStruct('../../../entry/src/main/ets/components/Basics.ets','NetImage','  build() {',{
+    image:{},C:{skeleton:0},ImageFit:{Cover:0},ImageLoader:{
+      needsManual:(url:string)=>url.startsWith('manual:'),cached:()=>null,
+      load:(url:string)=>{loads.push(url);if(!tasks.has(url))tasks.set(url,deferred<any>());return tasks.get(url)!.promise;}
+    }
+  });
+  const one=new ImageView(),two=new ImageView();one.src=two.src='manual:A';
+  one.aboutToAppear();two.aboutToAppear();one.aboutToDisappear();
+  const pm={release:()=>{throw new Error('shared image must not be released by a view');}};
+  tasks.get('manual:A')!.resolve(pm);await flush();
+  assert.equal(one.pixel,null);assert.equal(two.pixel,pm,'another mounted owner still receives the shared download');
+  two.src='manual:B';two.onSrc();two.src='manual:C';two.onSrc();
+  tasks.get('manual:B')!.resolve({});await flush();assert.equal(two.pixel,null);
+  const current={};tasks.get('manual:C')!.resolve(current);await flush();assert.equal(two.pixel,current);
+  two.aboutToDisappear();const n=loads.length;two.src='manual:D';two.onSrc();
+  assert.equal(loads.length,n,'an unmounted owner starts no new manual request');
+  two.aboutToAppear();assert.equal(loads.at(-1),'manual:D');
+  tasks.get('manual:D')!.resolve({});await flush();
+  console.log('Component tasks: owned timers, stale callbacks, return snapshots and shared image ownership passed');
+} finally {
+  Object.assign(globalThis,originalTimers);
+}

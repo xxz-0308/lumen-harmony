@@ -12,9 +12,17 @@ export struct NetImage {
   @Param placeholder: ResourceColor = C.skeleton;
   @Local loaded: boolean = false;
   @Local pixel: image.PixelMap | null = null;
+  private mounted: boolean = false;
+  private resolveGeneration: number = 0;
 
   aboutToAppear(): void {
+    this.mounted = true;
     this.resolveManual();
+  }
+
+  aboutToDisappear(): void {
+    this.mounted = false;
+    this.resolveGeneration++;
   }
 
   @Monitor('src')
@@ -25,7 +33,8 @@ export struct NetImage {
   }
 
   private resolveManual(): void {
-    if (!ImageLoader.needsManual(this.src)) {
+    const generation = ++this.resolveGeneration;
+    if (!this.mounted || !ImageLoader.needsManual(this.src)) {
       return;
     }
     const want = this.src;
@@ -36,7 +45,8 @@ export struct NetImage {
       return;
     }
     ImageLoader.load(want).then((pm: image.PixelMap | null) => {
-      if (pm !== null && want === this.src) {
+      // The download is shared by other views; discard only this view's stale completion.
+      if (pm !== null && this.mounted && generation === this.resolveGeneration && want === this.src) {
         this.pixel = pm;
         this.loaded = true;
       }
