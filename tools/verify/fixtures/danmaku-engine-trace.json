@@ -1,0 +1,23 @@
+{
+  "none": {
+    "hash": "d7761442ba47a746430597c91dac2920de2e3c05cf066ba7e9d4694cf4c1c8a6",
+    "fills": 4366,
+    "strokes": 0,
+    "clears": 1337,
+    "maxQueue": 30
+  },
+  "stroke": {
+    "hash": "2c7eb65946f93a11c16357677064fd983d5e3a7f383b787169b73aaecdbb97ea",
+    "fills": 4366,
+    "strokes": 4366,
+    "clears": 1337,
+    "maxQueue": 30
+  },
+  "shadow": {
+    "hash": "7ed9847f62fa9591d8531d3c78f2664388dceea32709b40ecd658d3e5e8be006",
+    "fills": 4366,
+    "strokes": 0,
+    "clears": 1337,
+    "maxQueue": 30
+  }
+}
