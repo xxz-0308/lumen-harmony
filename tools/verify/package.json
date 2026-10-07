@@ -25,7 +25,7 @@
     "test:bullet-delay": "esbuild bullet-delay.test.ts --bundle --platform=node --format=esm --outfile=out/bullet-delay.test.mjs --loader:.ets=ts --resolve-extensions=.ts,.ets,.js --packages=external --target=es2022 --tsconfig=tsconfig.json && node out/bullet-delay.test.mjs",
     "test:navigation-route": "esbuild navigation-route.test.ts --bundle --platform=node --format=esm --outfile=out/navigation-route.test.mjs --loader:.ets=ts --resolve-extensions=.ts,.ets,.js --packages=external --target=es2022 --tsconfig=tsconfig.json && node out/navigation-route.test.mjs",
     "test:danmaku-engine": "esbuild danmaku-engine.test.ts --bundle --platform=node --format=esm --outfile=out/danmaku-engine.test.mjs --loader:.ets=ts --resolve-extensions=.ts,.ets,.js --packages=external --alias:@kit.ArkGraphics2D=./kit-display-sync.ts --alias:@kit.PerformanceAnalysisKit=./kit-hilog.ts --alias:@kit.ArkData=./kit-prefs.ts --alias:@kit.AbilityKit=./kit-ability.ts --alias:@kit.ArkUI=./kit-arkui.ts --alias:@kit.AccessibilityKit=./kit-accessibility.ts --target=es2022 --tsconfig=tsconfig.json && node out/danmaku-engine.test.mjs",
-    "test:component-tasks": "esbuild component-task-lifecycle.test.ts --bundle --platform=node --format=esm --outfile=out/component-task-lifecycle.test.mjs --packages=external --target=es2022 && node out/component-task-lifecycle.test.mjs"
+    "test:component-tasks": "esbuild component-task-lifecycle.test.ts --bundle --platform=node --format=esm --outfile=out/component-task-lifecycle.test.mjs --loader:.ets=ts --resolve-extensions=.ts,.ets,.js --packages=external --target=es2022 && node out/component-task-lifecycle.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

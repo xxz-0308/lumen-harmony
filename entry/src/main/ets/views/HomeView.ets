@@ -557,7 +557,7 @@ export struct HomeView {
         glowHeight: this.heroHeight + AppEnv.inst.statusBarHeight + 200
       })
       // Keep each platform's ListScroller and card handlers mounted. Only the active grid can
-      // interact or attach its hero geometry; changing the feed prop on one grid recycled cards.
+      // interact; changing the feed prop on one grid recycled cards.
       ForEach(Sites.ids, (site: SiteId) => {
         Stack() {
           RoomGrid({

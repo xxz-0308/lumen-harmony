@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { transform } from 'esbuild';
+import { PlayState } from '../../entry/src/main/ets/player/PlayerApi';
 
 // Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
@@ -79,7 +80,7 @@ try {
     BackgroundAudio:{detach:()=>effects.push('detach'), setMetadata:()=>effects.push('metadata'), update:()=>effects.push('audio')},
     Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
-    PlayState:{Idle:0,Playing:2,Buffering:4,Error:5}, NavigationOperation:{PUSH:1,POP:2},
+    PlayState, NavigationOperation:{PUSH:1,POP:2},
     Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2},
     isNarrowTheater:(w:number)=>w<900, showTheaterPanel:()=>true
   });
