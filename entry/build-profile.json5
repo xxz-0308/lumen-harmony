@@ -1,0 +1,23 @@
+{
+  "apiType": "stageMode",
+  "buildOption": {
+    "arkOptions": {},
+    "nativeLib": {
+      // The device is arm64; ijkplayer also ships x86_64 emulator libraries.
+      "filter": { "excludes": ["**/x86_64/*.so", "**/x86_64/*.so.*"] }
+    }
+  },
+  "buildOptionSet": [
+    {
+      "name": "release",
+      "arkOptions": {
+        "obfuscation": {
+          "ruleOptions": { "enable": false }
+        }
+      }
+    }
+  ],
+  "targets": [
+    { "name": "default" }
+  ]
+}

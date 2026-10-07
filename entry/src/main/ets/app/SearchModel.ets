@@ -1,0 +1,163 @@
+import { AnchorPage, LiveAnchorItem, LiveRoomItem, RoomPage, SiteId } from '../core/model/Models';
+import { Sites } from '../core/sites/Sites';
+import { RoomFeed } from './RoomFeed';
+import { Settings } from './Settings';
+import { Log } from '../util/Log';
+
+export type SearchMode = 'room' | 'anchor';
+
+/** Per-platform slice of an aggregated search. */
+@ObservedV2
+export class SiteResult {
+  siteId: SiteId = 'huya';
+  @Trace loading: boolean = false;
+  @Trace error: string = '';
+  @Trace rooms: LiveRoomItem[] = [];
+  @Trace anchors: LiveAnchorItem[] = [];
+  @Trace hasMore: boolean = false;
+
+  constructor(siteId: SiteId) {
+    this.siteId = siteId;
+  }
+
+  get count(): number {
+    return this.rooms.length + this.anchors.length;
+  }
+}
+
+/** Aggregated three-platform search; results stream in per site as each request returns. */
+@ObservedV2
+export class SearchModel {
+  static readonly inst: SearchModel = new SearchModel();
+
+  @Trace keyword: string = '';
+  @Trace mode: SearchMode = 'room';
+  @Trace filter: string = 'all';
+  @Trace results: SiteResult[] = [];
+  @Trace searched: boolean = false;
+  /** Full paged feed used when a single platform is selected in room mode. */
+  @Trace feed: RoomFeed | null = null;
+  /**
+   * Views must resync from this model: observing @Trace fields of a shared singleton is not
+   * reliable here, so every mutation pushes a notification instead.
+   */
+  onUpdate: (() => void) | null = null;
+  private seq: number = 0;
+  private lastSearchAt: number = 0;
+  private feedCache: Map<string, RoomFeed> = new Map<string, RoomFeed>();
+
+  private notify(): void {
+    this.onUpdate?.();
+  }
+
+  search(keyword: string, force: boolean = false): void {
+    const kw = keyword.trim();
+    if (kw.length === 0) {
+      return;
+    }
+    if (!force && this.searched && kw === this.keyword && Date.now() - this.lastSearchAt < 15000 &&
+      this.results.every((r: SiteResult) => !r.loading && r.error.length === 0)) {
+      Settings.inst.addSearchHistory(kw);
+      this.notify();
+      return;
+    }
+    this.feedCache.clear();
+    this.lastSearchAt = Date.now();
+    this.keyword = kw;
+    this.searched = true;
+    Settings.inst.addSearchHistory(kw);
+    const seq = ++this.seq;
+    this.results = Sites.ids.map((id: SiteId) => new SiteResult(id));
+    for (const r of this.results) {
+      this.runSite(r, kw, seq);
+    }
+    this.rebuildFeed();
+    this.notify();
+  }
+
+  setMode(m: SearchMode): void {
+    if (m === this.mode) {
+      return;
+    }
+    this.mode = m;
+    if (this.searched) {
+      this.search(this.keyword, true);
+    } else {
+      this.notify();
+    }
+  }
+
+  setFilter(f: string): void {
+    this.filter = f;
+    this.rebuildFeed();
+    this.notify();
+  }
+
+  private rebuildFeed(): void {
+    if (this.filter === 'all' || this.mode !== 'room' || !this.searched) {
+      this.feed = null;
+      return;
+    }
+    const site = Sites.of(this.filter);
+    const kw = this.keyword;
+    let feed = this.feedCache.get(this.filter);
+    if (feed === undefined) {
+      feed = new RoomFeed((page: number): Promise<RoomPage> => site.searchRooms(kw, page));
+      this.feedCache.set(this.filter, feed);
+      feed.load();
+    }
+    this.feed = feed;
+  }
+
+  private async runSite(r: SiteResult, kw: string, seq: number): Promise<void> {
+    r.loading = true;
+    r.error = '';
+    try {
+      const site = Sites.of(r.siteId);
+      if (this.mode === 'room') {
+        const page: RoomPage = await site.searchRooms(kw, 1);
+        if (seq !== this.seq) {
+          return;
+        }
+        r.rooms = page.items;
+        r.hasMore = page.hasMore;
+      } else {
+        const page: AnchorPage = await site.searchAnchors(kw, 1);
+        if (seq !== this.seq) {
+          return;
+        }
+        // live anchors first
+        r.anchors = page.items.slice().sort((a: LiveAnchorItem, b: LiveAnchorItem) =>
+          (b.liveStatus ? 1 : 0) - (a.liveStatus ? 1 : 0));
+        r.hasMore = page.hasMore;
+      }
+    } catch (e) {
+      Log.w('search', `${r.siteId} failed: ${e}`);
+      if (seq === this.seq) {
+        r.error = '搜索失败';
+      }
+    } finally {
+      if (seq === this.seq) {
+        r.loading = false;
+        this.notify();
+      }
+    }
+  }
+
+  retry(r: SiteResult): void {
+    r.loading = true;
+    r.error = '';
+    this.notify();
+    this.runSite(r, this.keyword, this.seq);
+  }
+
+  clear(): void {
+    this.seq++;
+    this.feedCache.clear();
+    this.keyword = '';
+    this.searched = false;
+    this.results = [];
+    this.feed = null;
+    this.notify();
+  }
+}

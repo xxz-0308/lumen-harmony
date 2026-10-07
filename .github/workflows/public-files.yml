@@ -1,0 +1,19 @@
+name: Public repository hygiene
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  publication-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Reject signing material and private debug artifacts
+        run: python3 tools/check-public-files.py

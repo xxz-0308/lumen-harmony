@@ -1,0 +1,47 @@
+{
+  "components": [
+    {
+      "component": "ijkplayer",
+      "repository": "https://gitcode.com/CPF-ApplicationTPC/ohos_ijkplayer",
+      "version_or_ref": "2.0.11",
+      "commit": "fe669dc75fbcfad5c6adc854fc4d6a2869c394c8",
+      "archive_sha256": "0a8094d4a2d821119041b1e3adbfe7a16edbeaf1d0c33da62ae79bd7de53f5d4"
+    },
+    {
+      "component": "ffmpeg",
+      "repository": "https://gitcode.com/CPF-ApplicationTPC/ohos_ffmpeg",
+      "version_or_ref": "ohos-n8.0",
+      "commit": "69c05840d1d5412007e50beb94c8508015e51d4f",
+      "archive_sha256": "bd12563cf9338bbcb434b57067d6e6877ca8e42ce967f5f6230ae978d3467dc4"
+    },
+    {
+      "component": "soundtouch",
+      "repository": "https://github.com/bilibili/soundtouch",
+      "version_or_ref": "ijk-r0.1.2-dev",
+      "commit": "6bf39cd3bf6b0c156267d12446b0d6bdcfcd53c2",
+      "archive_sha256": "43d2e341f247bdcaeea9aea7e43072b8fc2805d8753cf642f144269ea0f6d744"
+    },
+    {
+      "component": "libyuv",
+      "repository": "https://github.com/bilibili/libyuv",
+      "version_or_ref": "ijk-r0.2.1-dev",
+      "commit": "a0c7dd3e4b095649881f39152655437b8cde1589",
+      "archive_sha256": "d2f07e468217be4d003dabed7e80642a0a39f987a4fd5cc8190939bb4b5be260"
+    },
+    {
+      "component": "build-tools",
+      "repository": "https://gitcode.com/CPF-ApplicationTPC/tpc_c_cplusplus",
+      "version_or_ref": "native build recipes",
+      "commit": "c64d7253e6c8b05f5022721cf30e51b4738e02c9",
+      "archive_sha256": "de5141a35a0968d8e65f04d638a81247cbb9e82151a8de0dd547674e33b9d6ab"
+    },
+    {
+      "component": "openssl",
+      "repository": "https://github.com/openssl/openssl",
+      "version_or_ref": "openssl-3.4.3",
+      "archive_sha256": "fa727ed1399a64e754030a033435003991aee36bda9a5b080995cb2ac5cf7f37"
+    }
+  ],
+  "native_source_asset": "Lumen-1.0.0-native-sources.tar.gz",
+  "native_source_asset_sha256": "2361ce269af566190f3db5bd76e0c3b9265e87f56135863bf8592557fde8c3a3"
+}

@@ -1,0 +1,37 @@
+# Dependencies and generated output
+/oh_modules/
+/entry/oh_modules/
+**/build/
+/.hvigor/
+/.idea/
+/local.properties
+/node_modules/
+/tools/verify/node_modules/
+/tools/verify/out/
+/tools/shots/
+/entry/.preview/
+/.appanalyzer/
+/.cxx/
+
+# Local signing and account/device information: never publish these.
+/signing/
+/build-profile.local.json5
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.cer
+*.crt
+*.p7b
+*.pem
+*.key
+.env
+.env.*
+*.log
+*.ftrace
+*.htrace
+*.hap
+*.app
+*.har
+/.claude/
+/releases/

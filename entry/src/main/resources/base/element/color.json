@@ -1,0 +1,88 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#F5F5F7"
+    },
+    {
+      "name": "bg",
+      "value": "#F4F4F6"
+    },
+    {
+      "name": "bg_elevated",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "surface",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "surface_2",
+      "value": "#EDEDF1"
+    },
+    {
+      "name": "surface_3",
+      "value": "#E3E3E9"
+    },
+    {
+      "name": "stroke",
+      "value": "#14000000"
+    },
+    {
+      "name": "stroke_strong",
+      "value": "#26000000"
+    },
+    {
+      "name": "text_primary",
+      "value": "#111114"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#9E111114"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#99111114"
+    },
+    {
+      "name": "glass_tint",
+      "value": "#A6FFFFFF"
+    },
+    {
+      "name": "glass_stroke",
+      "value": "#1A000000"
+    },
+    {
+      "name": "skeleton",
+      "value": "#E7E7EC"
+    },
+    {
+      "name": "skeleton_hi",
+      "value": "#F4F4F7"
+    },
+    {
+      "name": "accent",
+      "value": "#F0542E"
+    },
+    {
+      "name": "accent_soft",
+      "value": "#1FF0542E"
+    },
+    {
+      "name": "live",
+      "value": "#FF3355"
+    },
+    {
+      "name": "scrim",
+      "value": "#59000000"
+    },
+    {
+      "name": "hero_fade",
+      "value": "#F4F4F6"
+    },
+    {
+      "name": "glass_pill",
+      "value": "#E6FFFFFF"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Lumen" },
+    { "name": "EntryAbility_desc", "value": "Lumen live streaming" },
+    { "name": "EntryAbility_label", "value": "Lumen" },
+    { "name": "perm_background", "value": "后台继续播放直播音频" }
+  ]
+}

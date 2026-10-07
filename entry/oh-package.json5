@@ -1,0 +1,13 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Lumen entry module",
+  "main": "",
+  "author": "",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "@ohos/ijkplayer": "^2.0.11"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
+}

@@ -1,0 +1,40 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["tablet", "phone", "2in1"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "supportWindowMode": ["fullscreen", "split", "floating"],
+        "orientation": "auto_rotation_restricted",
+        "backgroundModes": ["audioPlayback"],
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["action.system.home"]
+          }
+        ]
+      }
+    ],
+    "requestPermissions": [
+      { "name": "ohos.permission.INTERNET" },
+      { "name": "ohos.permission.ACCESS_NOTIFICATION_POLICY" },
+      { "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:perm_background",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "always" } }
+    ]
+  }
+}

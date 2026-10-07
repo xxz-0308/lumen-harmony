@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { getTestPreference, setTestOpenUnavailable, setTestPreference } from './kit-prefs';
+
+Object.assign(globalThis, {
+  ObservedV2: (value: unknown): unknown => value,
+  Trace: (): void => {}
+});
+const { Settings } = await import('../../entry/src/main/ets/app/Settings');
+const s = Settings.inst;
+s.load({} as never);
+s.volumeMode = 'app';
+s.appVolume = 0.35;
+s.accentPalette = 'mint';
+s.blockWords = ['keep-my-rule'];
+await s.flush();
+s.volumeMode = 'media';
+s.appVolume = 1;
+s.load({} as never);
+assert.equal(s.volumeMode, 'app', 'application mode survives a cold settings reload');
+assert.equal(s.appVolume, 0.35, 'independent gain survives a cold settings reload');
+const previous = getTestPreference('lumen_settings', 'data');
+setTestOpenUnavailable(true);
+s.load({} as never);
+s.appVolume = 0.45;
+s.scheduleSave();
+assert.ok(s.storageError.length > 0, 'failed open cannot imply settings are saved');
+await assert.rejects(s.flush());
+assert.equal(getTestPreference('lumen_settings', 'data'), previous);
+setTestOpenUnavailable(false);
+s.retryStorage();
+await new Promise<void>((resolve) => setTimeout(resolve, 0));
+assert.equal(s.storageError, '');
+assert.equal(s.volumeMode, 'app', 'retry keeps the previous on-disk mode');
+assert.equal(s.appVolume, 0.45, 'retry merges only the gain changed while storage was unavailable');
+assert.equal(s.accentPalette, 'mint', 'retry keeps untouched on-disk appearance');
+assert.deepEqual(s.blockWords, ['keep-my-rule'], 'retry does not erase an existing block list');
+assert.equal(JSON.parse(getTestPreference('lumen_settings', 'data')!).appVolume, 0.45);
+setTestPreference('lumen_settings', 'data', JSON.stringify({ volumeMode: 'app', appVolume: 4, danmakuOn: 'false' }));
+s.load({} as never);
+assert.equal(s.appVolume, 1, 'out-of-range volume falls back safely');
+assert.equal(s.danmakuOn, true, 'wrongly typed Boolean is not used');
+let accountEvents = 0;
+const accountListener = (): void => { accountEvents++; };
+s.subscribeAccount(accountListener);
+s.publishAccount();
+assert.equal(accountEvents, 1, 'mounted account view receives an explicit update');
+s.unsubscribeAccount(accountListener);
+s.publishAccount();
+assert.equal(accountEvents, 1, 'unmounted account view no longer receives updates');
+console.log('Settings: persisted volume, failed-open retry, malformed types and account notifications');

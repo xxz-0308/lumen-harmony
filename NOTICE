@@ -1,0 +1,19 @@
+Lumen — a HarmonyOS native live-streaming client
+Copyright (C) 2026 Lumen contributors
+
+This project is free software: you may redistribute and/or modify it under
+GNU GPL version 3 or, at your option, any later version. It is provided
+WITHOUT ANY WARRANTY. See LICENSE for the complete terms.
+
+The feature set and platform protocol implementations reference Simple Live
+(xiaoyaocz/dart_simple_live), copyright its respective contributors, whose
+GPL licensing and authorship are retained. Lumen is not an official upstream
+or streaming-platform client.
+
+The bundled/default player is @ohos/ijkplayer 2.0.11. Its library and other
+third-party components remain under their own licenses. See
+THIRD_PARTY_NOTICES.md, LICENSES/, and the native source bundle attached to
+Releases for attribution, licenses and corresponding source references.
+
+Third-party platform names, game images and streamed content belong to their
+respective rights holders and are not relicensed by this repository.
