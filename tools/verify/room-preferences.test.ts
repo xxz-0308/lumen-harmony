@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { getTestPreference, setTestOpenUnavailable, setTestPreference } from './kit-prefs';
 import { isNarrowTheater, showTheaterPanel } from '../../entry/src/main/ets/room/TheaterLayout';
-import { HeroSource, HeroSources } from '../../entry/src/main/ets/room/HeroSources';
 
 Object.assign(globalThis, {
   ObservedV2: (value: unknown): unknown => value,
@@ -72,37 +71,4 @@ for (const width of [320, 759, 760, 899, 900, 1200]) {
 }
 assert.equal(s.theaterPanelOpen, false, 'window derivation performs no preference writes');
 
-const source = new HeroSource();
-source.mount('hero_home_huya_1');
-source.setBounds('20,30,300,169');
-source.setVisible(true);
-source.capture();
-assert.equal(HeroSources.canReturn(source.id), true);
-source.setVisible(false);
-assert.equal(HeroSources.canReturn(source.id), true, 'navigation occlusion is not source removal');
-source.setBounds('20,-200,300,169');
-assert.equal(HeroSources.canReturn(source.id), false, 'scrolling/layout change invalidates capture');
-source.setVisible(false);
-source.capture();
-assert.equal(HeroSources.canReturn(source.id), false, 'offscreen source cannot be captured');
-source.setVisible(true);
-source.capture();
-assert.equal(HeroSources.canReturn('hero_mine_huya_1'), false, 'scope must match');
-const duplicate = new HeroSource();
-duplicate.mount(source.id);
-assert.equal(HeroSources.canReturn(source.id), false, 'ambiguous duplicate ids use fade');
-duplicate.unmount();
-assert.equal(HeroSources.canReturn(source.id), true);
-source.mount('hero_home_huya_2');
-assert.equal(HeroSources.canReturn('hero_home_huya_1'), false, 'identity replacement invalidates old source');
-assert.equal(HeroSources.canReturn(source.id), false, 'replacement is not automatically captured');
-source.setBounds('20,30,300,169');
-source.setVisible(true);
-source.capture();
-HeroSources.release(source.id);
-assert.equal(HeroSources.canReturn(source.id), false, 'finished navigation releases capture');
-source.capture();
-source.unmount();
-assert.equal(HeroSources.canReturn('hero_home_huya_2'), false, 'removed source cannot be rebound');
-assert.equal(HeroSources.canReturn(''), false);
-console.log('Room preferences: migration, reload, storage recovery, window derivation and hero source validity');
+console.log('Room preferences: migration, reload, storage recovery and window derivation');

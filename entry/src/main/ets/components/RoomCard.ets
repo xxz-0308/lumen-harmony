@@ -3,17 +3,12 @@ import { C, formatOnline, Motion, Radius } from '../theme/Theme';
 import { Avatar, NetImage, SiteBadge } from './Basics';
 import { Nav } from '../app/Nav';
 import { FollowStore } from '../app/Stores';
-import { HeroSource } from '../room/HeroSources';
 import { AppEnv } from '../app/AppEnv';
 import { promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 
-export function heroIdFor(scope: string, item: LiveRoomItem): string {
-  return `hero_${scope}_${item.siteId}_${item.roomId}`;
-}
-
 /**
  * The primary room tile: 16:9 cover with an ambient bottom scrim, then avatar/title/meta.
- * The cover carries a geometryTransition id so it can morph into the player.
+ * The cover's window rect is passed to the room's image-only transition.
  */
 @ComponentV2
 export struct RoomCard {
@@ -26,21 +21,6 @@ export struct RoomCard {
   @Local pressed: boolean = false;
   /** Window rect (vp) of the cover, where the room's player morphs from and back to. */
   private coverRect: number[] = [];
-  private heroSource: HeroSource = new HeroSource();
-
-  aboutToAppear(): void {
-    this.syncHeroSource();
-  }
-
-  @Monitor('item', 'scope')
-  syncHeroSource(): void {
-    const id = heroIdFor(this.scope, this.item);
-    if (this.heroSource.id !== id) this.heroSource.mount(id);
-  }
-
-  aboutToDisappear(): void {
-    this.heroSource.unmount();
-  }
 
   @Builder
   menu() {
@@ -109,11 +89,7 @@ export struct RoomCard {
       .aspectRatio(16 / 9)
       .borderRadius(Radius.lg)
       .clip(true)
-      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => {
-        this.heroSource.setVisible(visible && ratio >= 1);
-      })
       .onAreaChange((_old: Area, area: Area) => {
-        this.heroSource.setBounds(`${area.globalPosition.x},${area.globalPosition.y},${area.width},${area.height}`);
         this.coverRect = [area.globalPosition.x as number, area.globalPosition.y as number,
           area.width as number, area.height as number];
       })
@@ -154,7 +130,7 @@ export struct RoomCard {
       }
     })
     .onClick(() => {
-      Nav.openLive(this.item, '', this.coverRect);
+      Nav.openLive(this.item, this.coverRect);
     })
     .bindContextMenu(this.menu(), ResponseType.LongPress)
   }

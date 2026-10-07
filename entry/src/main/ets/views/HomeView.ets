@@ -10,45 +10,22 @@ import { AppEnv } from '../app/AppEnv';
 import { Nav } from '../app/Nav';
 import { C, formatOnline, Layout, Motion, Radius, Space } from '../theme/Theme';
 import { RoomGrid } from '../components/RoomGrid';
-import { heroIdFor } from '../components/RoomCard';
 import { Avatar, LiveDot, NetImage, Segmented, Shimmer, SiteBadge, StateView } from '../components/Basics';
 import { AmbientGlow, PillIndicator, SectionTitle } from '../components/Decor';
 
-import { HeroSource } from '../room/HeroSources';
-
 const SITE_LABELS: string[] = ['虎牙', '斗鱼', 'B站'];
 
-/** One source per rendered slide; hidden platform copies never register the same hero id. */
+/** Keeps a reused slide's click handler bound to its current room. */
 @ComponentV2
-struct HomeHeroSource {
+struct HomeHeroEntry {
   @Param item: LiveRoomItem = new LiveRoomItem();
-  @Param eligible: boolean = false;
   @BuilderParam content: () => void;
-  private source: HeroSource = new HeroSource();
-
-  aboutToAppear(): void { this.syncSource(); }
-  aboutToDisappear(): void { this.source.unmount(); }
-
-  @Monitor('eligible', 'item')
-  syncSource(): void {
-    if (this.eligible) this.source.mount(heroIdFor('hero', this.item));
-    else this.source.unmount();
-  }
 
   build() {
     Stack() { this.content() }
       .width('100%')
       .height('100%')
-      .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => {
-        this.source.setVisible(this.eligible && visible && ratio >= 1);
-      })
-      .onAreaChange((o: Area, n: Area) => {
-        this.source.setBounds(`${n.globalPosition.x}_${n.globalPosition.y}_${n.width}_${n.height}`);
-      })
-      .onClick(() => {
-        this.source.capture();
-        Nav.openLive(this.item, this.eligible ? heroIdFor('hero', this.item) : '');
-      })
+      .onClick(() => Nav.openLive(this.item))
   }
 }
 
@@ -221,14 +198,14 @@ export struct HomeView {
   }
 
   @Builder
-  heroSlide(item: LiveRoomItem, index: number, hostSite: SiteId) {
-    HomeHeroSource({ item: item, eligible: hostSite === this.site && !AppEnv.inst.reduceMotion }) {
-      this.heroSlideContent(item, index, hostSite)
+  heroSlide(item: LiveRoomItem, index: number) {
+    HomeHeroEntry({ item: item }) {
+      this.heroSlideContent(item, index)
     }
   }
 
   @Builder
-  heroSlideContent(item: LiveRoomItem, index: number, hostSite: SiteId) {
+  heroSlideContent(item: LiveRoomItem, index: number) {
     Row({ space: 32 }) {
       Stack({ alignContent: Alignment.TopStart }) {
         NetImage({ src: this.heroCover(item) })
@@ -271,7 +248,6 @@ export struct HomeView {
       .borderRadius(Radius.xl)
       .clip(true)
       .shadow({ radius: 40, color: '#4D000000', offsetY: 16 })
-      .geometryTransition(hostSite === this.site && !AppEnv.inst.reduceMotion ? heroIdFor('hero', item) : '', { follow: true })
 
       if (!this.compact) {
         Column({ space: 14 }) {
@@ -382,7 +358,7 @@ export struct HomeView {
       Column({ space: 16 }) {
         Swiper() {
           ForEach(this.heroItems, (item: LiveRoomItem, i: number) => {
-            this.heroSlide(item, i, hostSite)
+            this.heroSlide(item, i)
           }, (item: LiveRoomItem) => `${item.siteId}_${item.roomId}`)
         }
         .width('100%')

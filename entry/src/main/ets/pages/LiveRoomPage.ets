@@ -24,7 +24,6 @@ import { BackgroundAudio } from '../platform/BackgroundAudio';
 import { LivePip } from '../platform/LivePip';
 import { Log } from '../util/Log';
 import { isNarrowTheater, showTheaterPanel } from '../room/TheaterLayout';
-import { HeroSources } from '../room/HeroSources';
 
 type SheetKind = '' | 'quality' | 'line' | 'danmaku' | 'follows' | 'sleep';
 
@@ -65,10 +64,6 @@ export struct LiveRoomPage {
   @Local hud: string = '';
   @Local hudValue: number = 0;
   @Local scToast: ScCard | null = null;
-  @Local heroId: string = '';
-  private heroTimer: number = -1;
-  private heroDetached: boolean = false;
-  private sourceHeroId: string = '';
   private sourceRoomKey: string = '';
   @Local exiting: boolean = false;
   private disposed: boolean = false;
@@ -151,28 +146,14 @@ export struct LiveRoomPage {
   aboutToAppear(): void {
     this.env.subscribeForeground(this.foregroundListener);
     this.syncSettings();
-    // The shared cover and hero key must exist before NavDestination's first frame, not only
-    // after onReady. Otherwise the first card-to-room transition animates a blank destination.
+    // The cover must be available before the destination's first transition frame.
     this.model.preview = this.route.preview;
-    if (!this.heroDetached) {
-      this.heroId = this.env.reduceMotion ? '' : this.route.heroId;
-    }
   }
 
   onReady(ctx: NavDestinationContext): void {
     const p = ctx.pathInfo.param as LiveRouteParam;
     Log.i('page', `live onReady ${p.siteId} room=${p.roomId}`);
-    this.heroId = this.env.reduceMotion ? '' : p.heroId;
-    this.sourceHeroId = p.heroId;
     this.sourceRoomKey = `${p.siteId}_${p.roomId}`;
-    if (p.heroId.length > 0) {
-      // A live surface must not stay bound to a home card that can be rebuilt by follow/feed updates.
-      this.heroTimer = setTimeout(() => {
-        this.heroTimer = -1;
-        this.heroDetached = true;
-        this.heroId = '';
-      }, 1200);
-    }
     this.audioOwner = BackgroundAudio.attach(AppEnv.inst.context, {
       play: () => {
         this.pausedByBackground = false;
@@ -203,7 +184,6 @@ export struct LiveRoomPage {
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
     this.env.unsubscribeForeground(this.foregroundListener);
-    HeroSources.release(this.sourceHeroId);
     this.pip.dispose();
     this.clearPipGrace();
     BackgroundAudio.detach(this.audioOwner);
@@ -216,10 +196,6 @@ export struct LiveRoomPage {
     }
     clearTimeout(this.hideTimer);
     clearTimeout(this.panelHideTimer);
-    if (this.heroTimer >= 0) {
-      clearTimeout(this.heroTimer);
-      this.heroTimer = -1;
-    }
     clearTimeout(this.hudTimer);
     clearTimeout(this.scTimer);
     if (this.sleepTimer >= 0) {
@@ -601,10 +577,6 @@ export struct LiveRoomPage {
   }
 
   private toggleFollow(): void {
-    if (this.heroId.length > 0) {
-      this.heroDetached = true;
-      this.heroId = '';
-    }
     if (this.model.detail === null) {
       promptAction.showToast({ message: '正在加载房间信息，请稍候' });
       return;
@@ -621,8 +593,6 @@ export struct LiveRoomPage {
   private goBack(): void {
     if (this.exiting) return;
     this.exiting = true;
-    if (this.heroTimer >= 0) clearTimeout(this.heroTimer);
-    this.heroTimer = -1;
     // Shrink the picture the viewer was actually watching, not the stale card thumbnail. The grab
     // is short and bounded; a slow or failed one falls back to the cover.
     const leave = (): void => this.fadeBack();
@@ -661,7 +631,6 @@ export struct LiveRoomPage {
   private fadeBack(): void {
     if (this.sleepPopIssued || this.backIssued) return;
     this.backIssued = true;
-    this.heroId = '';
     // The destination's customTransition morphs the picture back into its card.
     Nav.stack.pop(true);
   }
@@ -1463,7 +1432,6 @@ export struct LiveRoomPage {
         .borderRadius(this.fullscreen ? 0 : Radius.xl)
         .shadow(this.fullscreen ? { radius: 0, color: Color.Transparent } :
           { radius: 36, color: '#59000000', offsetY: 14 })
-        .geometryTransition(this.env.reduceMotion ? '' : this.heroId)
 
         this.theaterActions()
         this.sidePanel()

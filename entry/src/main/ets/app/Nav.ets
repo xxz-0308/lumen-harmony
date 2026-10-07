@@ -1,6 +1,4 @@
 import { LiveRoomItem, LiveSubCategory, SiteId } from '../core/model/Models';
-import { AppEnv } from './AppEnv';
-import { Motion } from '../theme/Theme';
 
 export class Routes {
   static readonly live: string = 'live';
@@ -16,8 +14,6 @@ export class LiveRouteParam {
   roomId: string = '';
   /** Card data shown instantly while the room detail loads. */
   preview: LiveRoomItem | null = null;
-  /** geometryTransition id shared with the originating card cover ('' = no hero animation). */
-  heroId: string = '';
   /** Window rect (vp) of the tapped card's cover; the cover morphs into the player. w < 0 = unknown. */
   coverX: number = 0;
   coverY: number = 0;
@@ -34,15 +30,11 @@ export class Nav {
   /** Navigation id so a PiP window restores into the live room page. */
   static readonly id: string = 'lumen_nav';
 
-  static openLive(item: LiveRoomItem, heroId: string = '', cover: number[] = []): void {
+  static openLive(item: LiveRoomItem, cover: number[] = []): void {
     const p = new LiveRouteParam();
     p.siteId = item.siteId;
     p.roomId = item.roomId;
     p.preview = item;
-    // The cross-page geometry morph rendered half-built frames (black regions, clipped glow);
-    // the room page now animates as a whole from the card instead (LiveRoomPage.customTransition).
-    void heroId;
-    p.heroId = '';
     if (cover.length === 4 && cover[2] > 0 && cover[3] > 0) {
       p.coverX = cover[0];
       p.coverY = cover[1];
