@@ -4,7 +4,7 @@
   <p><strong>给鸿蒙平板的一间轻盈直播影院。</strong></p>
   <p>虎牙 · 斗鱼 · 哔哩哔哩｜ArkTS 原生界面｜ijkplayer</p>
   <p>
-    <a href="https://github.com/xxz-0308/lumen-harmony/releases">下载 / Releases</a> ·
+    <a href="https://github.com/xxz-0308/lumen-harmony/releases/latest">最新版本 / Latest Release</a> ·
     <a href="#构建与安装">构建与安装</a> ·
     <a href="https://github.com/xxz-0308/lumen-harmony/issues">反馈问题</a> ·
     <a href="THIRD_PARTY_NOTICES.md">开源致谢</a>
@@ -15,7 +15,7 @@
 
 Lumen 是参考 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live) 的 HarmonyOS 原生直播客户端。它使用 ArkTS / ArkUI 构建，重点放在横屏观看、清晰的内容层级、克制的玻璃浮层，以及不打断观看的日常操作。
 
-**这是个人项目的首个公开预览版本，不是任何直播平台的官方客户端。** 平台接口、播放地址和弹幕协议可能变化；请勿把当前可用性理解为长期保证。
+**这是个人维护的开发者版本，不是任何直播平台的官方客户端。** 平台接口、播放地址和弹幕协议可能变化；请勿把当前可用性理解为长期保证。
 
 ## 界面预览
 
