@@ -23,11 +23,11 @@ export struct HomeView {
   @Event onSeeFollows: () => void = () => {};
   @Event onSeeCategories: () => void = () => {};
   @Local site: SiteId = Settings.inst.homeSite;
-  @Local leavingSite: string = '';
+  @Local drawnSites: SiteId[] = [this.site];
   @Local alignSite: string = '';
   @Local alignY: number = -1;
   @Local alignSeq: number = 0;
-  private leaveTimer: number = -1;
+  private switchSeq: number = 0;
   private mounted: boolean = false;
   private outerScroller: Scroller = new Scroller();
   private listY: number = 0;
@@ -60,20 +60,28 @@ export struct HomeView {
 
   aboutToDisappear(): void {
     this.mounted = false;
-    this.clearLeaving();
+    this.clearSwitch();
     CategoryStore.unsubscribeFavorites(this.syncFavorites);
     FollowStore.inst.unsubscribe(this.syncFollows);
   }
 
   @Monitor('active')
   onActive(): void {
-    if (!this.active) this.clearLeaving();
+    if (!this.active) this.clearSwitch();
   }
 
-  private clearLeaving(): void {
-    if (this.leaveTimer >= 0) clearTimeout(this.leaveTimer);
-    this.leaveTimer = -1;
-    this.leavingSite = '';
+  private clearSwitch(): void {
+    this.switchSeq++;
+    this.drawnSites = [this.site];
+  }
+
+  private finishSwitch(seq: number): void {
+    if (this.mounted && this.active && seq === this.switchSeq) this.drawnSites = [this.site];
+  }
+
+  private siteOffset(site: SiteId): number {
+    if (AppEnv.inst.reduceMotion || site === this.site) return 0;
+    return Sites.ids.indexOf(site) < Sites.ids.indexOf(this.site) ? -28 : 28;
   }
 
   private ensureLoaded(): void {
@@ -131,19 +139,22 @@ export struct HomeView {
 
   private selectSite(i: number): void {
     const id = Sites.ids[i];
-    if (!this.mounted || id === undefined || id === this.site) return;
-    const current = this.site;
+    if (!this.mounted || !this.active || id === undefined || id === this.site) return;
     // The outer scroll is shared; only the bounded list below it needs alignment.
     this.alignSite = id;
     this.alignY = this.listY;
     this.alignSeq++;
-    this.clearLeaving();
-    this.leavingSite = current;
-    this.leaveTimer = setTimeout(() => {
-      this.leaveTimer = -1;
-      if (this.mounted) this.leavingSite = '';
-    }, 320);
-    this.site = id;
+    const seq = ++this.switchSeq;
+    if (AppEnv.inst.reduceMotion) {
+      this.site = id;
+      this.drawnSites = [id];
+    } else {
+      if (!this.drawnSites.includes(id)) this.drawnSites = this.drawnSites.concat(id);
+      // Retarget native animation from its current presentation; no delayed selection or scroll.
+      this.getUIContext().animateTo({
+        duration: 280, curve: Motion.snappy, onFinish: () => this.finishSwitch(seq)
+      }, () => { this.site = id; });
+    }
     Settings.inst.homeSite = id;
     Settings.inst.scheduleSave();
     this.ensureLoaded();
@@ -303,10 +314,9 @@ export struct HomeView {
         })
           .width('100%')
           .height('100%')
-          .visibility(site === this.site || site === this.leavingSite ? Visibility.Visible : Visibility.Hidden)
+          .visibility(this.drawnSites.includes(site) ? Visibility.Visible : Visibility.Hidden)
           .opacity(site === this.site ? 1 : 0)
-          .translate({ x: site === this.site ? 0 : (Sites.ids.indexOf(site) < Sites.ids.indexOf(this.site) ? -56 : 56) })
-          .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 280, curve: Motion.smooth })
+          .translate({ x: this.siteOffset(site) })
           .enabled(site === this.site)
           .hitTestBehavior(site === this.site ? HitTestMode.Default : HitTestMode.None)
           .accessibilityLevel(site === this.site ? 'auto' : 'no-hide-descendants')
@@ -314,6 +324,7 @@ export struct HomeView {
     }
     .width('100%')
     .height(Math.max(1, this.contentH))
+    .id('home_recommendations')
     .clip(true)
   }
 

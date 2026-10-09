@@ -75,14 +75,20 @@ class Scroller {
 const settings = { homeSite: 'huya', scheduleSave() {} };
 const env = { winHeight: 700, foreground: true, reduceMotion: false };
 const Home = await logicStruct('../../../entry/src/main/ets/views/HomeView.ets', 'HomeView', '  @Builder\n  liveStrip()', {
-  Settings: { inst: settings }, AppEnv: { inst: env }, Sites: { ids }, Scroller, HomeHeroState,
+  Settings: { inst: settings }, AppEnv: { inst: env }, Sites: { ids }, Scroller, HomeHeroState, Motion: { snappy: 0 },
   Feeds: { recommendOf: (id: SiteId) => cache.get(id) },
   CategoryStore: { favorites: () => [], subscribeFavorites() {}, unsubscribeFavorites() {} },
   FollowStore: { inst: { items: [], subscribe() {}, unsubscribe() {}, refreshAll() {} } },
   setTimeout: (fn: () => void) => { const id = ++nextTimer; timers.set(id, fn); return id; },
   clearTimeout: (id: number) => timers.delete(id)
 });
-const home = new Home(); home.active = true; home.aboutToAppear();
+const finishes: (() => void)[] = [];
+const home = new Home(); home.active = true;
+home.getUIContext = () => ({ animateTo: (options: { onFinish: () => void }, change: () => void) => {
+  finishes.push(options.onFinish); change();
+} });
+home.aboutToAppear();
+assert.equal(home.siteOffset('huya'), 0); assert.equal(home.siteOffset('douyu'), 28); assert.equal(home.siteOffset('bilibili'), 28);
 const commonKeys = home.heroItems.map(HomeHeroState.key);
 home.outerScroller.y = 140; home.onListScroll('huya', 321);
 home.selectSite(1);
@@ -91,11 +97,24 @@ assert.deepEqual(home.heroItems.map(HomeHeroState.key), commonKeys, 'platform ch
 home.onListScroll('huya', 900); assert.equal(home.listY, 321, 'outgoing lists cannot replace the shared offset');
 home.onListScroll('douyu', 275); home.selectSite(2);
 assert.equal(home.alignY, 275); home.selectSite(0);
-assert.equal(home.alignY, 275); assert.equal(home.site, 'huya'); assert.equal(timers.size, 1);
-home.selectSite(0); home.selectSite(99); assert.equal(timers.size, 1);
+assert.equal(home.alignY, 275); assert.equal(home.site, 'huya'); assert.equal(timers.size, 0);
+assert.deepEqual(home.drawnSites, ids);
+finishes[0](); finishes[1]();
+assert.deepEqual(home.drawnSites, ids, 'old animation completions cannot hide the newest outgoing/incoming layers');
+finishes[2](); assert.deepEqual(home.drawnSites, ['huya']);
+assert.equal(home.outerScroller.y, 140); assert.equal(home.listY, 275, 'completion does not restore an old offset');
+home.selectSite(0); home.selectSite(99); assert.equal(finishes.length, 3);
 assert.equal(loads.size, 0, 'switches use populated RoomFeed caches without first-page requests');
-assert.equal(settings.homeSite, 'huya');
-home.aboutToDisappear(); assert.equal(timers.size, 0); home.selectSite(1); assert.equal(home.site, 'huya');
+home.selectSite(2); assert.equal(home.siteOffset('huya'), -28); assert.equal(home.siteOffset('douyu'), -28);
+const interrupted = finishes.at(-1)!;
+env.reduceMotion = true; home.selectSite(0);
+assert.equal(home.siteOffset('douyu'), 0); assert.deepEqual(home.drawnSites, ['huya']);
+interrupted(); assert.deepEqual(home.drawnSites, ['huya'], 'reduced motion invalidates an older animated cleanup');
+assert.equal(settings.homeSite, 'huya'); env.reduceMotion = false;
+home.selectSite(1); const detachedFinish = finishes.at(-1)!;
+home.aboutToDisappear(); const detachedSites = home.drawnSites; detachedFinish();
+assert.equal(home.drawnSites, detachedSites); assert.equal(timers.size, 0);
+home.selectSite(0); assert.equal(home.site, 'douyu');
 
 const covers: string[] = [];
 const HeroView = await logicStruct('../../../entry/src/main/ets/views/HomeHero.ets', 'HomeHero', '  @Builder\n  placeholder()', {
