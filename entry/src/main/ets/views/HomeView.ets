@@ -8,52 +8,33 @@ import { FollowItem, FollowStore } from '../app/Stores';
 import { Settings } from '../app/Settings';
 import { AppEnv } from '../app/AppEnv';
 import { Nav } from '../app/Nav';
-import { C, formatOnline, Layout, Motion, Radius, Space } from '../theme/Theme';
+import { C, Layout, Motion, Radius, Space } from '../theme/Theme';
 import { RoomGrid } from '../components/RoomGrid';
-import { Avatar, LiveDot, NetImage, Segmented, Shimmer, SiteBadge, StateView } from '../components/Basics';
-import { AmbientGlow, PillIndicator, SectionTitle } from '../components/Decor';
+import { Avatar, RefreshGlow, Segmented } from '../components/Basics';
+import { AmbientGlow, SectionTitle } from '../components/Decor';
+import { HomeHero } from './HomeHero';
+import { HomeHeroState } from './HomeHeroState';
 
 const SITE_LABELS: string[] = ['虎牙', '斗鱼', 'B站'];
-
-/** Keeps a reused slide's click handler bound to its current room. */
-@ComponentV2
-struct HomeHeroEntry {
-  @Param item: LiveRoomItem = new LiveRoomItem();
-  @BuilderParam content: () => void;
-
-  build() {
-    Stack() { this.content() }
-      .width('100%')
-      .height('100%')
-      .onClick(() => Nav.openLive(this.item))
-  }
-}
 
 @ComponentV2
 export struct HomeView {
   @Param active: boolean = false;
-  @Event onSeeFollows: () => void = () => {
-  };
-  @Event onSeeCategories: () => void = () => {
-  };
+  @Event onSeeFollows: () => void = () => {};
+  @Event onSeeCategories: () => void = () => {};
   @Local site: SiteId = Settings.inst.homeSite;
-  /** The grid sliding out after a switch; it stays drawn until its exit animation ends. */
   @Local leavingSite: string = '';
   @Local alignSite: string = '';
   @Local alignY: number = -1;
   @Local alignSeq: number = 0;
   private leaveTimer: number = -1;
-  @Local heroIndex: number = 0;
-  /** Auto-rotation pauses while the user is touching the hero, so a tap can't land on a swap. */
-  @Local heroTouched: boolean = false;
-  @Local touchedItems: LiveRoomItem[] = [];
-  private releaseHeroTimer: number = -1;
-  @Local heroOpacity: number[] = [];
-  @Local heroShift: number[] = [];
+  private mounted: boolean = false;
+  private outerScroller: Scroller = new Scroller();
+  private listY: number = 0;
   @Local scrollY: number = 0;
-  private lastOffsets: Map<string, number> = new Map<string, number>();
-  private firstVisit: Set<string> = new Set<string>();
+  @Local ambientCover: string = '';
   @Local contentW: number = 1100;
+  @Local contentH: number = AppEnv.inst.winHeight;
   @Local favoriteCategories: LiveSubCategory[] = CategoryStore.favorites();
   @Local followSnapshot: FollowItem[] = FollowStore.inst.items;
   private syncFavorites: () => void = () => {
@@ -64,46 +45,40 @@ export struct HomeView {
   };
 
   aboutToAppear(): void {
+    this.mounted = true;
     CategoryStore.subscribeFavorites(this.syncFavorites);
     FollowStore.inst.subscribe(this.syncFollows);
     this.syncFavorites();
     this.syncFollows();
-    this.firstVisit.add(this.site);
-    this.ensureLoaded();
-    // Preload the other recommendations without starting any video; tab switches stay populated.
+    // The same caches serve the common hero and the three retained recommendation lists.
     for (const site of Sites.ids) {
       const feed = Feeds.recommendOf(site);
-      if (feed.items.length === 0 && !feed.initialLoading) {
-        feed.load();
-      }
+      if (feed.items.length === 0 && !feed.initialLoading) feed.load();
     }
     FollowStore.inst.refreshAll();
   }
 
   aboutToDisappear(): void {
-    if (this.releaseHeroTimer >= 0) {
-      clearTimeout(this.releaseHeroTimer);
-      this.releaseHeroTimer = -1;
-    }
+    this.mounted = false;
+    this.clearLeaving();
     CategoryStore.unsubscribeFavorites(this.syncFavorites);
     FollowStore.inst.unsubscribe(this.syncFollows);
   }
 
   @Monitor('active')
   onActive(): void {
-    if (!this.active) {
-      if (this.releaseHeroTimer >= 0) clearTimeout(this.releaseHeroTimer);
-      this.releaseHeroTimer = -1;
-      this.heroTouched = false;
-      this.touchedItems = [];
-    }
+    if (!this.active) this.clearLeaving();
+  }
+
+  private clearLeaving(): void {
+    if (this.leaveTimer >= 0) clearTimeout(this.leaveTimer);
+    this.leaveTimer = -1;
+    this.leavingSite = '';
   }
 
   private ensureLoaded(): void {
-    const f = Feeds.recommendOf(this.site);
-    if (f.items.length === 0 && !f.initialLoading) {
-      f.load();
-    }
+    const feed = this.feed;
+    if (feed.items.length === 0 && !feed.initialLoading) feed.load();
   }
 
   @Computed
@@ -118,33 +93,31 @@ export struct HomeView {
   }
 
   @Computed
-  get commonCategories(): LiveSubCategory[] {
-    return this.favoriteCategories;
-  }
-
-  /** Followed anchors that are live take the stage; otherwise the top recommendations. */
-  @Computed
   get heroItems(): LiveRoomItem[] {
-    if (this.heroTouched && this.touchedItems.length > 0) {
-      return this.touchedItems;
-    }
     const live = this.liveFollows.slice(0, 6).map((f: FollowItem) => f.toRoomItem());
-    if (live.length > 0) {
-      return live;
-    }
-    return this.feed.items.slice(0, 5);
+    if (live.length > 0) return live;
+    return HomeHeroState.fallback(Sites.ids.map((site: SiteId) => Feeds.recommendOf(site).items));
   }
 
   @Computed
-  get heroFromFollows(): boolean {
-    return this.liveFollows.length > 0;
+  get heroLoading(): boolean {
+    return Sites.ids.some((site: SiteId) => Feeds.recommendOf(site).initialLoading);
   }
 
-  @Monitor('heroFromFollows')
-  onHeroSource(): void {
-    // The source can flip between follows and recommendations; start from the top again.
-    if (!this.heroTouched) {
-      this.heroIndex = 0;
+  @Computed
+  get heroError(): string {
+    if (this.heroItems.length > 0 || this.heroLoading) return '';
+    for (const site of Sites.ids) {
+      const error = Feeds.recommendOf(site).error;
+      if (error.length > 0) return error;
+    }
+    return '';
+  }
+
+  private retryHero(): void {
+    for (const site of Sites.ids) {
+      const feed = Feeds.recommendOf(site);
+      if (feed.items.length === 0 && !feed.initialLoading) feed.load();
     }
   }
 
@@ -153,257 +126,39 @@ export struct HomeView {
   }
 
   get heroHeight(): number {
-    const h = AppEnv.inst.winHeight;
-    return this.compact ? this.contentW * 9 / 16 : Math.max(260, Math.min(360, h * 0.4));
+    return this.compact ? this.contentW * 9 / 16 : Math.max(260, Math.min(360, AppEnv.inst.winHeight * 0.4));
   }
 
   private selectSite(i: number): void {
     const id = Sites.ids[i];
-    if (id === this.site) {
-      return;
-    }
+    if (!this.mounted || id === undefined || id === this.site) return;
     const current = this.site;
-    // Keep the viewer exactly where they are: the next platform's grid takes over the current
-    // scroll offset (clamped by the list) before it slides in.
-    const offset = this.lastOffsets.get(current) ?? 0;
-    this.lastOffsets.set(id, offset);
-    this.firstVisit.add(id);
+    // The outer scroll is shared; only the bounded list below it needs alignment.
     this.alignSite = id;
-    this.alignY = offset;
+    this.alignY = this.listY;
     this.alignSeq++;
+    this.clearLeaving();
     this.leavingSite = current;
-    if (this.leaveTimer >= 0) {
-      clearTimeout(this.leaveTimer);
-    }
     this.leaveTimer = setTimeout(() => {
       this.leaveTimer = -1;
-      this.leavingSite = '';
+      if (this.mounted) this.leavingSite = '';
     }, 320);
     this.site = id;
     Settings.inst.homeSite = id;
     Settings.inst.scheduleSave();
-    this.heroIndex = 0;
     this.ensureLoaded();
   }
 
-  private heroCover(item: LiveRoomItem): string {
-    if (item.siteId === 'huya') {
-      // Huya's w1280_h720 OSS style returns 404; the unstyled screenshot is the full-size source.
-      return item.cover.replace('?x-oss-process=style/w338_h190&', '');
-    }
-    if (item.siteId === 'bilibili') {
-      return item.cover.replace('@400w.jpg', '@1280w.jpg');
-    }
-    return item.cover;
+  private onListScroll(site: SiteId, y: number): void {
+    if (!this.mounted || site !== this.site) return;
+    this.listY = Math.max(0, y);
+    this.updateGlow();
   }
 
-  @Builder
-  heroSlide(item: LiveRoomItem, index: number) {
-    HomeHeroEntry({ item: item }) {
-      this.heroSlideContent(item, index)
-    }
-  }
-
-  @Builder
-  heroSlideContent(item: LiveRoomItem, index: number) {
-    Row({ space: 32 }) {
-      Stack({ alignContent: Alignment.TopStart }) {
-        NetImage({ src: this.heroCover(item) })
-        if (this.compact) {
-          Column()
-            .width('100%')
-            .height('100%')
-            .linearGradient({ angle: 180, colors: [['#00000000', 0.35], ['#CC000000', 1]] })
-          Column({ space: 6 }) {
-            Text(item.userName)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(C.onMedia)
-            Text(item.title)
-              .fontSize(14)
-              .fontColor(C.onMedia2)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .position({ left: 18, bottom: 16 })
-          .padding({ right: 18 })
-        }
-        Row({ space: 6 }) {
-          LiveDot({ dim: 6, color: '#FFFFFF' })
-          Text(this.heroFromFollows ? '关注 · 直播中' : 'LIVE')
-            .fontSize(11)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Color.White)
-            .letterSpacing(this.heroFromFollows ? 0 : 1)
-        }
-        .padding({ left: 10, right: 12, top: 5, bottom: 5 })
-        .borderRadius(Radius.pill)
-        .backgroundColor(C.live)
-        .margin(14)
-      }
-      .height('100%')
-      .aspectRatio(16 / 9)
-      .constraintSize({ maxWidth: this.compact ? '100%' : '60%' })
-      .borderRadius(Radius.xl)
-      .clip(true)
-      .shadow({ radius: 40, color: '#4D000000', offsetY: 16 })
-
-      if (!this.compact) {
-        Column({ space: 14 }) {
-          Row({ space: 8 }) {
-            SiteBadge({ siteId: item.siteId, onMedia: false })
-            if (item.area.length > 0) {
-              Text(item.area)
-                .fontSize(12)
-                .fontColor(C.text2)
-            }
-          }
-          Row({ space: 14 }) {
-            Avatar({ src: item.avatar, dim: 52, live: true })
-            Column({ space: 4 }) {
-              Text(item.userName)
-                .fontSize(26)
-                .fontWeight(FontWeight.Bolder)
-                .fontColor(C.text1)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Row({ space: 4 }) {
-                SymbolGlyph($r('sys.symbol.flame_fill'))
-                  .fontSize(13)
-                  .fontColor([C.accent])
-                Text(`${formatOnline(item.online)} 人气`)
-                  .fontSize(13)
-                  .fontColor(C.text2)
-              }
-            }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-          }
-          Text(item.title)
-            .fontSize(17)
-            .lineHeight(25)
-            .fontColor(C.text2)
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Row({ space: 8 }) {
-            SymbolGlyph($r('sys.symbol.play_fill'))
-              .fontSize(16)
-              .fontColor([Color.White])
-            Text('进入直播间')
-              .fontSize(15)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(Color.White)
-          }
-          .height(44)
-          .padding({ left: 20, right: 24 })
-          .borderRadius(Radius.pill)
-          .linearGradient({ angle: 100, colors: [[C.accentHighlight, 0], [C.accent, 1]] })
-          .shadow({ radius: 18, color: C.accentGlow, offsetY: 6 })
-          .margin({ top: 6 })
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        .justifyContent(FlexAlign.Center)
-        .translate({ x: AppEnv.inst.reduceMotion ? 0 : (this.heroShift[index] ?? 0) * 60 })
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .opacity(this.heroOpacity[index] ?? 1)
-  }
-
-  @Builder
-  hero(hostSite: SiteId) {
-    if (this.heroItems.length === 0 && this.feed.error.length > 0) {
-      // Never leave the hero shimmering forever when the feed failed.
-      StateView({
-        icon: $r('sys.symbol.exclamationmark_message'),
-        title: '推荐加载失败',
-        subtitle: this.feed.error,
-        actionText: '重试',
-        onAction: () => {
-          this.feed.load();
-        }
-      })
-        .width('100%')
-        .height(this.heroHeight)
-    } else if (this.heroItems.length === 0) {
-      Row({ space: 32 }) {
-        Shimmer({ radius: Radius.xl })
-          .height('100%')
-          .aspectRatio(16 / 9)
-        if (!this.compact) {
-          Column({ space: 14 }) {
-            Shimmer({ radius: 6 })
-              .width('40%')
-              .height(22)
-            Shimmer({ radius: 6 })
-              .width('70%')
-              .height(30)
-            Shimmer({ radius: 6 })
-              .width('90%')
-              .height(16)
-            Shimmer({ radius: 22 })
-              .width(150)
-              .height(44)
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-        }
-      }
-      .width('100%')
-      .height(this.heroHeight)
-    } else {
-      Column({ space: 16 }) {
-        Swiper() {
-          ForEach(this.heroItems, (item: LiveRoomItem, i: number) => {
-            this.heroSlide(item, i)
-          }, (item: LiveRoomItem) => `${item.siteId}_${item.roomId}`)
-        }
-        .width('100%')
-        .height(this.heroHeight)
-        .indicator(false)
-        .loop(this.heroItems.length > 1)
-        .autoPlay(!AppEnv.inst.reduceMotion && this.active && hostSite === this.site && Settings.inst.heroAutoPlay && this.heroItems.length > 1 && !this.heroTouched)
-        .interval(6500)
-        .curve(Motion.smooth)
-        .clip(false)
-        .index(this.heroIndex)
-        .onChange((i: number) => {
-          this.heroIndex = i;
-        })
-        .onTouch((e: TouchEvent) => {
-          if (e.type === TouchType.Down) {
-            if (this.releaseHeroTimer >= 0) {
-              clearTimeout(this.releaseHeroTimer);
-            }
-            this.touchedItems = this.heroItems.slice();
-            this.heroTouched = true;
-          } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-            this.releaseHeroTimer = setTimeout(() => {
-              this.releaseHeroTimer = -1;
-              this.heroTouched = false;
-              this.touchedItems = [];
-              if (this.heroIndex >= this.heroItems.length) {
-                this.heroIndex = 0;
-              }
-            }, 200);
-          }
-        })
-        .customContentTransition({
-          timeout: 1000,
-          transition: (proxy: SwiperContentTransitionProxy) => {
-            const p = Math.max(-1, Math.min(1, proxy.position));
-            this.heroOpacity[proxy.index] = 1 - Math.abs(p) * 0.7;
-            this.heroShift[proxy.index] = p;
-          }
-        })
-        if (this.heroItems.length > 1) {
-          PillIndicator({ count: this.heroItems.length, index: this.heroIndex })
-        }
-      }
-    }
+  private updateGlow(): void {
+    const y = Math.max(0, this.outerScroller.currentOffset().yOffset) + this.listY;
+    const q = Math.round(y / 24) * 24;
+    if (q !== this.scrollY) this.scrollY = q;
   }
 
   @Builder
@@ -414,19 +169,14 @@ export struct HomeView {
           SectionTitle({ title: '正在直播', subtitle: `${this.liveFollows.length} 位关注的主播` })
           Blank()
           Row({ space: 2 }) {
-            Text('全部')
-              .fontSize(13)
-              .fontColor(C.text2)
-            SymbolGlyph($r('sys.symbol.chevron_right'))
-              .fontSize(14)
-              .fontColor([C.text2])
+            Text('全部').fontSize(13).fontColor(C.text2)
+            SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([C.text2])
           }
           .height(40)
           .padding({ left: 12, right: 12 })
           .onClick(() => this.onSeeFollows())
         }
         .width('100%')
-
         List({ space: 12 }) {
           ForEach(this.liveFollows, (f: FollowItem) => {
             ListItem() {
@@ -434,16 +184,11 @@ export struct HomeView {
                 Avatar({ src: f.avatar, dim: 40, live: true })
                 Column({ space: 2 }) {
                   Text(f.userName)
-                    .fontSize(14)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(C.text1)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .fontSize(14).fontWeight(FontWeight.Medium).fontColor(C.text1)
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(f.area.length > 0 ? f.area : f.title)
-                    .fontSize(11)
-                    .fontColor(C.text2)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .fontSize(11).fontColor(C.text2)
+                    .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
                 .alignItems(HorizontalAlign.Start)
                 .constraintSize({ maxWidth: 130 })
@@ -472,22 +217,18 @@ export struct HomeView {
   commonCategoryStrip() {
     Column({ space: 12 }) {
       Row() {
-        SectionTitle({ title: '常用分类', subtitle: this.commonCategories.length > 0 ? '跨平台快速进入' : '长按分类可添加' })
+        SectionTitle({ title: '常用分类', subtitle: this.favoriteCategories.length > 0 ? '跨平台快速进入' : '长按分类可添加' })
         Blank()
-        Text(this.commonCategories.length > 0 ? '管理' : '去添加')
-          .fontSize(13)
-          .fontColor(C.text2)
-          .height(40)
+        Text(this.favoriteCategories.length > 0 ? '管理' : '去添加')
+          .fontSize(13).fontColor(C.text2).height(40)
           .padding({ left: 12, right: 12 })
           .onClick(() => this.onSeeCategories())
       }
       .width('100%')
-      if (this.commonCategories.length > 0) {
+      if (this.favoriteCategories.length > 0) {
         List({ space: 6 }) {
-          ForEach(this.commonCategories, (category: LiveSubCategory) => {
-            ListItem() {
-              SubCategoryTile({ c: category, showSite: true })
-            }
+          ForEach(this.favoriteCategories, (category: LiveSubCategory) => {
+            ListItem() { SubCategoryTile({ c: category, showSite: true }) }
           }, (category: LiveSubCategory) => `${category.siteId}_${category.id}`)
         }
         .listDirection(Axis.Horizontal)
@@ -500,7 +241,7 @@ export struct HomeView {
   }
 
   @Builder
-  header(hostSite: SiteId) {
+  header() {
     Column({ space: Space.xl }) {
       Button({ type: ButtonType.Normal }) {
         Row({ space: 12 }) {
@@ -517,29 +258,28 @@ export struct HomeView {
       .height(52)
       .padding(0)
       .borderRadius(Radius.pill)
-      // Glass over the ambient glow, like the other floating controls.
       .backgroundColor(C.glassTint)
       .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
       .borderWidth(0.5)
       .borderColor(C.glassStroke)
       .shadow({ radius: 16, color: '#1A000000', offsetY: 4 })
-      .stateStyles({
-        normal: { .opacity(1) },
-        pressed: { .opacity(0.8) }
-      })
+      .stateStyles({ normal: { .opacity(1) }, pressed: { .opacity(0.8) } })
       .accessibilityText('搜索直播间、主播或链接')
       .id('home_search')
       .onClick(() => Nav.openSearch())
-      this.hero(hostSite)
+      HomeHero({
+        items: this.heroItems, fromFollows: this.liveFollows.length > 0,
+        active: this.active && AppEnv.inst.foreground, compact: this.compact,
+        heroHeight: this.heroHeight, error: this.heroError, loading: this.heroLoading,
+        onRetry: () => this.retryHero(), onCover: (cover: string) => { this.ambientCover = cover; }
+      })
       this.liveStrip()
       this.commonCategoryStrip()
       Row() {
         SectionTitle({ title: '为你推荐' })
         Blank()
         Segmented({
-          items: SITE_LABELS,
-          glass: true,
-          selected: Sites.ids.indexOf(this.site),
+          items: SITE_LABELS, glass: true, selected: Sites.ids.indexOf(this.site),
           onSelect: (i: number) => this.selectSite(i)
         })
       }
@@ -547,58 +287,71 @@ export struct HomeView {
       .margin({ top: 8 })
     }
     .width('100%')
+    .padding({ left: Space.page, right: Space.page, top: AppEnv.inst.statusBarHeight + 20, bottom: Space.xl })
+  }
+
+  @Builder
+  recommendations() {
+    Stack({ alignContent: Alignment.Top }) {
+      ForEach(Sites.ids, (site: SiteId) => {
+        RoomGrid({
+          feed: Feeds.recommendOf(site), scope: `home_${site}`,
+          active: this.active && site === this.site, bottomInset: Layout.bottomNavInset,
+          nested: true, externalRefresh: true,
+          alignY: this.alignY, alignSeq: site === this.alignSite ? this.alignSeq : 0,
+          onScrollY: (y: number) => this.onListScroll(site, y)
+        })
+          .width('100%')
+          .height('100%')
+          .visibility(site === this.site || site === this.leavingSite ? Visibility.Visible : Visibility.Hidden)
+          .opacity(site === this.site ? 1 : 0)
+          .translate({ x: site === this.site ? 0 : (Sites.ids.indexOf(site) < Sites.ids.indexOf(this.site) ? -56 : 56) })
+          .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 280, curve: Motion.smooth })
+          .enabled(site === this.site)
+          .hitTestBehavior(site === this.site ? HitTestMode.Default : HitTestMode.None)
+          .accessibilityLevel(site === this.site ? 'auto' : 'no-hide-descendants')
+      }, (site: SiteId) => site)
+    }
+    .width('100%')
+    .height(Math.max(1, this.contentH))
+    .clip(true)
+  }
+
+  @Builder
+  refreshIndicator() {
+    RefreshGlow({ refreshing: this.feed.refreshing })
   }
 
   build() {
     Stack({ alignContent: Alignment.Top }) {
       AmbientGlow({
-        src: this.heroItems.length > 0 ? this.heroItems[Math.min(this.heroIndex, this.heroItems.length - 1)].cover : '',
-        strength: Math.max(0, 1 - this.scrollY / 420),
+        src: this.ambientCover, strength: Math.max(0, 1 - this.scrollY / 420),
         glowHeight: this.heroHeight + AppEnv.inst.statusBarHeight + 200
       })
-      // Keep each platform's ListScroller and card handlers mounted. Only the active grid can
-      // interact; changing the feed prop on one grid recycled cards.
-      ForEach(Sites.ids, (site: SiteId) => {
-        Stack() {
-          RoomGrid({
-            feed: Feeds.recommendOf(site),
-            scope: `home_${site}`,
-            active: this.active && site === this.site,
-            bottomInset: Layout.bottomNavInset,
-            startOffset: this.lastOffsets.get(site) ?? 0,
-            alignY: this.alignY,
-            alignSeq: site === this.alignSite ? this.alignSeq : 0,
-            topPadding: AppEnv.inst.statusBarHeight + 20,
-            onScrollY: (y: number) => {
-              if (site !== this.site) {
-                return;
-              }
-              this.lastOffsets.set(site, Math.max(0, y));
-              const q = Math.round(y / 24) * 24;
-              if (q !== this.scrollY) {
-                this.scrollY = q;
-              }
-            }
-          }) {
-            this.header(site)
+      Refresh({ refreshing: this.feed.refreshing, builder: this.refreshIndicator() }) {
+        Scroll(this.outerScroller) {
+          Column() {
+            this.header()
+            this.recommendations()
           }
+          .width('100%')
         }
         .width('100%')
         .height('100%')
-        // Inactive grids stay laid out (Hidden) so they can be aligned before they appear; the
-        // incoming one slides in from its side of the switcher, the outgoing one slides away.
-        .visibility(site === this.site || site === this.leavingSite ? Visibility.Visible : Visibility.Hidden)
-        .opacity(site === this.site ? 1 : 0)
-        .translate({ x: site === this.site ? 0 :
-          (Sites.ids.indexOf(site) < Sites.ids.indexOf(this.site) ? -56 : 56) })
-        .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 280, curve: Motion.smooth })
-        .enabled(site === this.site)
-      }, (site: SiteId) => site)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.None)
+        .onDidScroll(() => this.updateGlow())
+      }
+      .onRefreshing(() => this.feed.load(true))
+      .refreshOffset(64)
+      .width('100%')
+      .height('100%')
     }
     .width('100%')
     .height('100%')
-    .onAreaChange((o: Area, n: Area) => {
-      this.contentW = (n.width as number) - Space.page * 2;
+    .onAreaChange((_old: Area, area: Area) => {
+      this.contentW = (area.width as number) - Space.page * 2;
+      this.contentH = area.height as number;
     })
   }
 }
