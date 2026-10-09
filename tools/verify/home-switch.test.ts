@@ -143,4 +143,6 @@ assert.equal(grid.nested, false); assert.equal(grid.externalRefresh, false, 'oth
 const homeSrc = readFileSync(new URL('../../../entry/src/main/ets/views/HomeView.ets', import.meta.url), 'utf-8');
 assert.equal((homeSrc.match(/HomeHero\(\{/g) ?? []).length, 1);
 assert.equal(homeSrc.includes('Swiper()'), false);
+const heroSrc = readFileSync(new URL('../../../entry/src/main/ets/views/HomeHero.ets', import.meta.url), 'utf-8');
+assert.equal(heroSrc.includes('.clip(false)'), false, 'adjacent hero slides cannot draw into the common page gutter');
 console.log('Home: common hero identity, stale proxy rejection, cached site switching and shared offset passed');

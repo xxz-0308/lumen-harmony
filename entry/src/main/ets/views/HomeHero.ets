@@ -278,7 +278,8 @@ export struct HomeHero {
           this.state.slides.length > 1 && !this.state.touched)
         .interval(6500)
         .curve(Motion.smooth)
-        .clip(false)
+        // Adjacent slides must not leak into the page gutter after a swipe settles.
+        .clip(true)
         .index(this.state.index)
         .onChange(this.changeHandler(this.state.generation))
         .onAnimationEnd(this.endHandler(this.state.generation))
