@@ -83,7 +83,7 @@ try {
     Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
-    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0},
+    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0}, KeyboardAvoidMode:{RESIZE:2},
     isNarrowTheater:(w:number)=>w<900, showTheaterPanel:()=>true
   });
   const fresh = () => {
@@ -260,7 +260,13 @@ try {
   p=fresh();let dismissals=0;p.getUIContext=()=>({animateTo:(_options:any,change:()=>void)=>change()});p.armHide=()=>dismissals++;
   p.sheet='quality';p.toggleControls();assert.equal(p.sheet,'');assert.equal(dismissals,1);
   p.disposeRoom('navigation');p.openSheet('line');assert.equal(p.sheet,'');
-  console.log('Component tasks: lifecycle, current intent, retained state, category reversal and unified dismissal passed');
+  p=fresh();let keyboardMode=1;p.armHide=()=>{};
+  p.getUIContext=()=>({animateTo:(_options:any,change:()=>void)=>change(),getKeyboardAvoidMode:()=>keyboardMode,
+    setKeyboardAvoidMode:(mode:number)=>{keyboardMode=mode;}});
+  p.openSheet('sleep');assert.equal(keyboardMode,2);p.closeSheet();assert.equal(keyboardMode,1);
+  p.openSheet('sleep');p.disposeRoom('navigation');assert.equal(keyboardMode,1,'disposal restores the previous keyboard policy');
+  p.openSheet('sleep');assert.equal(keyboardMode,1);
+  console.log('Component tasks: lifecycle, current intent, retained state, category reversal, dismissal and scoped keyboard policy passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

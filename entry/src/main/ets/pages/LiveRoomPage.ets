@@ -1,5 +1,5 @@
 import { image } from '@kit.ImageKit';
-import { promptAction } from '@kit.ArkUI';
+import { KeyboardAvoidMode, promptAction, UIContext } from '@kit.ArkUI';
 import { RoomModel, ScCard } from '../room/RoomModel';
 import { VideoLayer } from '../room/VideoLayer';
 import {
@@ -60,6 +60,8 @@ export struct LiveRoomPage {
   /** Where the control that opened a floating option card was touched (window vp). */
   private sheetAnchorX: number = 0;
   private sheetAnchorY: number = 0;
+  private sheetKeyboardContext: UIContext | null = null;
+  private previousKeyboardMode: KeyboardAvoidMode | null = null;
   @Local rootW: number = AppEnv.inst.winWidth;
   @Local rootH: number = AppEnv.inst.winHeight;
   @Local hud: string = '';
@@ -192,6 +194,7 @@ export struct LiveRoomPage {
     }
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
+    this.restoreSheetKeyboard();
     this.env.unsubscribeForeground(this.foregroundListener);
     this.clearPipCloseCheck();
     this.clearBackCapture();
@@ -479,8 +482,29 @@ export struct LiveRoomPage {
     }
   }
 
+  private restoreSheetKeyboard(): void {
+    const context = this.sheetKeyboardContext;
+    const previous = this.previousKeyboardMode;
+    this.sheetKeyboardContext = null;
+    this.previousKeyboardMode = null;
+    if (context === null || previous === null) return;
+    try {
+      if (context.getKeyboardAvoidMode() === KeyboardAvoidMode.RESIZE) context.setKeyboardAvoidMode(previous);
+    } catch (e) {
+      Log.w('page', 'sheet keyboard context already detached');
+    }
+  }
+
   private openSheet(kind: SheetKind): void {
     if (this.disposed) return;
+    if (kind === 'sleep' && this.sheetKeyboardContext === null) {
+      const context = this.getUIContext();
+      this.previousKeyboardMode = context.getKeyboardAvoidMode();
+      this.sheetKeyboardContext = context;
+      context.setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    } else if (kind !== 'sleep') {
+      this.restoreSheetKeyboard();
+    }
     this.getUIContext().animateTo({ curve: Motion.smooth }, () => {
       this.sheet = kind;
     });
@@ -493,6 +517,7 @@ export struct LiveRoomPage {
 
   private closeSheet(): void {
     if (this.disposed) return;
+    this.restoreSheetKeyboard();
     this.getUIContext().animateTo({ curve: Motion.smooth }, () => {
       this.sheet = '';
     });
