@@ -52,7 +52,10 @@ const win = {
   getWindowAvoidArea: (type: number) => ({ topRect: { height: type === 0 ? 48 : 0 },
     bottomRect: { height: type === 3 ? keyboardPixels : type === 4 ? 24 : 0 } })
 };
-AppEnv.attachWindow(win as never); assert.equal(AppEnv.inst.keyboardHeight, 200);
-keyboardPixels = 0; callbacks.get('avoidAreaChange')!(); assert.equal(AppEnv.inst.keyboardHeight, 0);
+AppEnv.attachWindow(win as never); assert.equal(AppEnv.inst.keyboardHeight, 0);
+callbacks.get('keyboardHeightChange')!(400); assert.equal(AppEnv.inst.keyboardHeight, 200);
+keyboardPixels = 0; callbacks.get('avoidAreaChange')!();
+assert.equal(AppEnv.inst.keyboardHeight, 200, 'a generic avoid-area notification must not clear the authoritative keyboard height');
+callbacks.get('keyboardHeightChange')!(0); assert.equal(AppEnv.inst.keyboardHeight, 0);
 AppEnv.detachWindow(); assert.equal(AppEnv.inst.keyboardHeight, 0); assert.equal(callbacks.size, 0);
 console.log('AppEnv: foreground/motion ownership, font configuration and keyboard avoid-area cleanup passed');

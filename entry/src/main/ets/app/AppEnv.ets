@@ -32,6 +32,9 @@ export class AppEnv {
   @Trace immersive: boolean = false;
   @Trace reduceMotion: boolean = false;
 
+  private onKeyboardChanged: (height: number) => void = (height: number): void => {
+    this.keyboardHeight = this.px2vp(Math.max(0, height));
+  };
   private motionListening: boolean = false;
   private onMotionChanged: (enabled: boolean) => void = (enabled: boolean): void => {
     this.reduceMotion = enabled;
@@ -69,6 +72,7 @@ export class AppEnv {
       env.updateInsets();
       win.on('avoidAreaChange', () => env.updateInsets());
       win.on('windowSizeChange', (size: window.Size) => env.updateSize(size.width, size.height));
+      win.on('keyboardHeightChange', env.onKeyboardChanged);
       win.on('windowVisibilityChange', (visible: boolean) => {
         Log.i('env', `main window visible=${visible}`);
         AppEnv.setWindowVisible(visible);
@@ -88,6 +92,7 @@ export class AppEnv {
         w.off('avoidAreaChange');
         w.off('windowSizeChange');
         w.off('windowVisibilityChange');
+        w.off('keyboardHeightChange', AppEnv.inst.onKeyboardChanged);
       } catch (e) {
         // window already gone
       }
@@ -191,12 +196,6 @@ export class AppEnv {
     const nav = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
     this.statusBarHeight = this.px2vp(sys.topRect.height);
     this.navBarHeight = this.px2vp(nav.bottomRect.height);
-    try {
-      const keyboard = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD);
-      this.keyboardHeight = this.px2vp(keyboard.bottomRect.height);
-    } catch (e) {
-      this.keyboardHeight = 0;
-    }
   }
 
   private updateSize(wPx: number, hPx: number): void {

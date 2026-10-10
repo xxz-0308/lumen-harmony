@@ -80,6 +80,7 @@ export struct SearchSiteRow {
         }
       }
       .width('100%')
+      .constraintSize({ minHeight: 48 })
       if (this.error.length > 0) {
         this.failure()
       }
@@ -97,6 +98,7 @@ export struct SearchSiteRow {
           }, (i: number) => `sk${i}`)
         }
         .width('100%')
+        .height(this.mode === 'room' ? 210 : 72)
         .clip(true)
       } else if (this.count === 0 && this.error.length === 0) {
         Text('没有找到相关结果').fontSize(14).fontColor(C.text3).height(48)
