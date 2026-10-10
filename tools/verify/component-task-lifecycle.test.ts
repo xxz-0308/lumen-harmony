@@ -173,7 +173,7 @@ try {
   const tasks=new Map<string,ReturnType<typeof deferred<any>>>();
   const loads:string[]=[];
   const ImageView=await logicStruct('../../../entry/src/main/ets/components/Basics.ets','NetImage','  build() {',{
-    image:{},C:{skeleton:0},ImageFit:{Cover:0},ImageLoader:{
+    image:{},C:{skeleton:0},ImageFit:{Cover:0},AppEnv:{inst:{foreground:true}},ImageLoader:{
       needsManual:(url:string)=>url.startsWith('manual:'),cached:()=>null,
       load:(url:string)=>{loads.push(url);if(!tasks.has(url))tasks.set(url,deferred<any>());return tasks.get(url)!.promise;}
     }
@@ -190,6 +190,11 @@ try {
   assert.equal(loads.length,n,'an unmounted owner starts no new manual request');
   two.aboutToAppear();assert.equal(loads.at(-1),'manual:D');
   tasks.get('manual:D')!.resolve({});await flush();
+  two.visible=false;two.onActivity();const beforeHidden=loads.length;two.src='manual:E';two.onSrc();
+  assert.equal(loads.length,beforeHidden,'hidden manual-image consumers do not request replacements');
+  two.visible=true;two.onActivity();assert.equal(loads.at(-1),'manual:E');
+  two.env.foreground=false;two.onActivity();tasks.get('manual:E')!.resolve({});await flush();assert.equal(two.pixel,null);
+  two.env.foreground=true;two.onActivity();await flush();assert.notEqual(two.pixel,null,'foreground consumer resumes shared completed work');
   const followState={items:[] as any[],contentRevision:0,refreshing:false,refreshFailures:0,storageError:'',saveError:'',lastRefreshAt:0,
     subscribe:()=>{},unsubscribe:()=>{},refreshAll:()=>{}};
   const Follow=await logicStruct('../../../entry/src/main/ets/views/FollowView.ets','FollowView','  get contentW(): number',{

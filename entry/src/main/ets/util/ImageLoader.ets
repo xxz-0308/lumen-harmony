@@ -22,12 +22,18 @@ export class ImageLoader {
   }
 
   static cached(url: string): image.PixelMap | null {
-    return ImageLoader.cache.get(url) ?? null;
+    const hit = ImageLoader.cache.get(url);
+    if (hit === undefined) {
+      return null;
+    }
+    ImageLoader.cache.delete(url);
+    ImageLoader.cache.set(url, hit);
+    return hit;
   }
 
   static load(url: string): Promise<image.PixelMap | null> {
-    const hit = ImageLoader.cache.get(url);
-    if (hit !== undefined) {
+    const hit = ImageLoader.cached(url);
+    if (hit !== null) {
       return Promise.resolve(hit);
     }
     if ((ImageLoader.failed.get(url) ?? 0) > Date.now()) {

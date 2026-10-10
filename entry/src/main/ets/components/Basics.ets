@@ -12,6 +12,8 @@ export struct NetImage {
   @Param placeholder: ResourceColor = C.skeleton;
   @Local loaded: boolean = false;
   @Local pixel: image.PixelMap | null = null;
+  @Local env: AppEnv = AppEnv.inst;
+  @Local visible: boolean = true;
   private mounted: boolean = false;
   private resolveGeneration: number = 0;
 
@@ -32,9 +34,14 @@ export struct NetImage {
     this.resolveManual();
   }
 
+  @Monitor('visible', 'env.foreground')
+  onActivity(): void {
+    this.resolveManual();
+  }
+
   private resolveManual(): void {
     const generation = ++this.resolveGeneration;
-    if (!this.mounted || !ImageLoader.needsManual(this.src)) {
+    if (!this.mounted || !this.visible || !this.env.foreground || !ImageLoader.needsManual(this.src)) {
       return;
     }
     const want = this.src;
@@ -46,7 +53,8 @@ export struct NetImage {
     }
     ImageLoader.load(want).then((pm: image.PixelMap | null) => {
       // The download is shared by other views; discard only this view's stale completion.
-      if (pm !== null && this.mounted && generation === this.resolveGeneration && want === this.src) {
+      if (pm !== null && this.mounted && this.visible && this.env.foreground &&
+        generation === this.resolveGeneration && want === this.src) {
         this.pixel = pm;
         this.loaded = true;
       }
@@ -66,7 +74,7 @@ export struct NetImage {
           .objectFit(this.fit)
           .draggable(false)
           .opacity(this.loaded ? 1 : 0)
-          .animation({ duration: 320, curve: Curve.EaseOut })
+          .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 320, curve: Curve.EaseOut })
           .onComplete(() => {
             this.loaded = true;
           })
@@ -78,7 +86,7 @@ export struct NetImage {
           .draggable(false)
           .syncLoad(false)
           .opacity(this.loaded ? 1 : 0)
-          .animation({ duration: 320, curve: Curve.EaseOut })
+          .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 320, curve: Curve.EaseOut })
           .onComplete(() => {
             this.loaded = true;
           })
@@ -88,6 +96,7 @@ export struct NetImage {
     .height('100%')
     .clip(true)
     .borderRadius(this.radius)
+    .onVisibleAreaChange([0], (visible: boolean) => { this.visible = visible; })
   }
 }
 
