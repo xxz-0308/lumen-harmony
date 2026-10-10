@@ -108,7 +108,7 @@ export class RoomFeed {
   }
 
   async loadMore(): Promise<void> {
-    if (this.loadingMore || !this.hasMore || this.initialLoading || this.refreshing || this.page === 0) {
+    if (this.loadingMore || !this.hasMore || this.initialLoading || this.refreshing || this.page === 0 || this.pageError.length > 0) {
       return;
     }
     const seq = this.seq;

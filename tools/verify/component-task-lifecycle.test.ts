@@ -11,7 +11,7 @@ async function logicStruct(file: string, name: string, end: string, mocks: Recor
   const start = src.indexOf(marker) + marker.length;
   assert.ok(start >= marker.length);
   let body = src.slice(start, src.indexOf(end, start));
-  body = body.replace(/^\s*@(Param|Local)\s+/gm, '\n  ')
+  body = body.replace(/^\s*@(Param|Local|Event|BuilderParam)\s+/gm, '\n  ')
     .replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n');
   const constants = (src.match(/^const (INFO_H|GAP): number = \d+;/gm) ?? []).join('\n');
   const key = `__fixture_${name}`;
@@ -52,7 +52,8 @@ const originalTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 Object.assign(globalThis, { setTimeout: clock.timeout, setInterval: clock.interval, clearTimeout: clock.clear, clearInterval: clock.clear });
 const effects: string[] = [];
 let pops = 0, capture = deferred<any>(), pipStart = deferred<void>();
-const settings = { danmakuOn:true, sideChat:true, videoFill:false, theaterPanelOpen:true, volumeMode:'app', appVolume:1, leaveBehavior:'pip' };
+const settings = { danmakuOn:true, sideChat:true, videoFill:false, theaterPanelOpen:true, volumeMode:'app', appVolume:1, leaveBehavior:'pip', scheduleSave:()=>effects.push('save') };
+let volumeWrite: (value: number) => Promise<boolean> = async () => true;
 const env: any = {
   winWidth:1200, winHeight:800, statusBarHeight:20, navBarHeight:20, reduceMotion:false, foreground:false,
   subscribeForeground:()=>effects.push('subscribe'), unsubscribeForeground:()=>effects.push('unsubscribe'),
@@ -78,7 +79,7 @@ try {
   const Page = await logicStruct('../../../entry/src/main/ets/pages/LiveRoomPage.ets', 'LiveRoomPage', '  // ---------- builders ----------', {
     RoomModel:Model, AppEnv:{inst:env}, Settings:{inst:settings}, LivePip:Pip, LiveRouteParam:Route,
     BackgroundAudio:{detach:()=>effects.push('detach'), setMetadata:()=>effects.push('metadata'), update:()=>effects.push('audio')},
-    Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}},
+    Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
     Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2},
@@ -136,6 +137,38 @@ try {
   const toasts=effects.filter(e=>e==='toast').length;
   pipStart.reject(new Error('late failure')); await flush();
   assert.equal(effects.filter(e=>e==='toast').length,toasts);
+
+  const written:number[]=[];
+  let firstVolume=deferred<boolean>(),secondVolume=deferred<boolean>();
+  volumeWrite=value=>{written.push(value);return written.length===1?firstVolume.promise:secondVolume.promise;};
+  settings.volumeMode='media'; p=fresh();
+  p.changeVolume(0.25); p.changeVolume(0.5); await flush();
+  assert.deepEqual(written,[0.25]); p.disposeRoom('navigation');
+  const afterDispose=effects.length;
+  firstVolume.resolve(false); await flush(); secondVolume.resolve(false); await flush();
+  assert.deepEqual(written,[0.25,0.5],'accepted system writes remain ordered even after their page leaves');
+  assert.equal(settings.volumeMode,'media'); assert.equal(effects.length,afterDispose);
+  p.changeVolume(0.75); await flush(); assert.equal(written.length,2);
+
+  written.length=0;firstVolume=deferred<boolean>();secondVolume=deferred<boolean>();p=fresh();
+  p.changeVolume(0.25);p.changeVolume(0.5);await flush();firstVolume.resolve(false);await flush();
+  assert.equal(settings.volumeMode,'media','an earlier failure must not override a newer volume intent');
+  secondVolume.resolve(true);await flush();assert.equal(settings.volumeMode,'media');
+  p=fresh();volumeWrite=async()=>false;
+  p.changeVolume(0.6);await flush();assert.equal(settings.volumeMode,'app','current failure retains the existing fallback');
+  settings.volumeMode='media';p=fresh();const changedRoom=deferred<boolean>();volumeWrite=()=>changedRoom.promise;
+  p.changeVolume(0.7);p.model.roomId='next-room';changedRoom.resolve(false);await flush();
+  assert.equal(settings.volumeMode,'media','failure in a former room does not affect the replacement room');
+  settings.volumeMode='app';
+
+  const searchModel={keyword:'old',mode:'room',filter:'all',results:[],feed:null,searched:true,onUpdate:null as null|(()=>void)};
+  const Search=await logicStruct('../../../entry/src/main/ets/views/SearchView.ets','SearchView','  @Builder\n  searchBar()',{
+    SearchModel:{inst:searchModel},Settings:{inst:{searchHistory:[]}},Space:{md:12}
+  });
+  const oldSearch=new Search(),newSearch=new Search();oldSearch.aboutToAppear();const oldUpdate=searchModel.onUpdate!;
+  newSearch.aboutToAppear();oldSearch.aboutToDisappear();searchModel.keyword='new';searchModel.onUpdate!();
+  assert.equal(newSearch.keyword,'new');assert.equal(oldSearch.keyword,'old');oldUpdate();assert.equal(oldSearch.keyword,'old');
+  newSearch.aboutToDisappear();assert.equal(searchModel.onUpdate,null,'old search cleanup preserves the newer owner');
 
   const tasks=new Map<string,ReturnType<typeof deferred<any>>>();
   const loads:string[]=[];

@@ -1,5 +1,4 @@
 import { LengthMetrics } from '@kit.ArkUI';
-import { LiveAnchorItem, LiveRoomItem } from '../core/model/Models';
 import { LinkParser, RoomRef } from '../core/sites/Sites';
 import { SearchMode, SearchModel, SiteResult } from '../app/SearchModel';
 import { RoomFeed } from '../app/RoomFeed';
@@ -7,9 +6,8 @@ import { Settings } from '../app/Settings';
 import { AppEnv } from '../app/AppEnv';
 import { Nav } from '../app/Nav';
 import { C, Layout, Motion, Radius, SiteStyle, Space } from '../theme/Theme';
-import { RoomCard } from '../components/RoomCard';
-import { AnchorTile } from '../components/AnchorTile';
-import { RoomCardSkeleton, Segmented, Shimmer, SiteBadge, StateView } from '../components/Basics';
+import { Segmented, StateView } from '../components/Basics';
+import { SearchSiteRow } from './SearchSiteRow';
 import { FilterChip } from '../components/Decor';
 import { RoomGrid } from '../components/RoomGrid';
 
@@ -30,8 +28,8 @@ export struct SearchView {
   @Local keyword: string = '';
   @Local history: string[] = [];
   @Local bodyW: number = 0;
-  /** Bumped on every resync so list rows are rebuilt with fresh per-site state. */
-  @Local rev: number = 0;
+  private mounted: boolean = false;
+  private onModelUpdate: () => void = () => this.sync();
 
   @Monitor('active')
   onActive(): void {
@@ -41,18 +39,19 @@ export struct SearchView {
   }
 
   aboutToAppear(): void {
+    this.mounted = true;
     this.input = this.m.keyword;
-    this.m.onUpdate = () => this.sync();
+    this.m.onUpdate = this.onModelUpdate;
     this.sync();
   }
 
   aboutToDisappear(): void {
-    if (this.m.onUpdate !== null) {
-      this.m.onUpdate = null;
-    }
+    this.mounted = false;
+    if (this.m.onUpdate === this.onModelUpdate) this.m.onUpdate = null;
   }
 
   private sync(): void {
+    if (!this.mounted) return;
     this.searched = this.m.searched;
     this.mode = this.m.mode;
     this.filter = this.m.filter;
@@ -60,7 +59,6 @@ export struct SearchView {
     this.results = this.m.results.slice();
     this.feed = this.m.feed;
     this.history = Settings.inst.searchHistory.slice();
-    this.rev++;
   }
 
   get contentW(): number {
@@ -275,111 +273,17 @@ export struct SearchView {
         selected: this.filter === 'all',
         onTap: () => this.m.setFilter('all')
       })
-      ForEach(this.results, (r: SiteResult) => {
-        FilterChip({
-          label: `${SiteStyle.label(r.siteId)}${r.loading ? '' : ' ' + r.count}`,
-          selected: this.filter === r.siteId,
-          dotColor: SiteStyle.color(r.siteId),
-          onTap: () => this.m.setFilter(r.siteId)
+      Repeat<SiteResult>(this.results)
+        .each((r: RepeatItem<SiteResult>) => {
+          FilterChip({
+            label: `${SiteStyle.label(r.item.siteId)}${r.item.loading ? '' : ' ' + r.item.count}`,
+            selected: this.filter === r.item.siteId,
+            dotColor: SiteStyle.color(r.item.siteId),
+            onTap: () => this.m.setFilter(r.item.siteId)
+          })
         })
-      }, (r: SiteResult) => `${r.siteId}_${this.rev}_${r.count}`)
+        .key((r: SiteResult) => r.siteId)
     }
-  }
-
-  @Builder
-  siteRow(r: SiteResult) {
-    Column({ space: 14 }) {
-      Row({ space: 10 }) {
-        SiteBadge({ siteId: r.siteId, onMedia: false })
-        if (!r.loading && r.error.length === 0) {
-          Text(`${r.count} 个结果`)
-            .fontSize(13)
-            .fontColor(C.text3)
-        }
-        Blank()
-        if (r.count > 0) {
-          Row({ space: 2 }) {
-            Text('更多')
-              .fontSize(13)
-              .fontColor(C.text2)
-              .height(48)
-              .padding({ left: 8, right: 8 })
-            SymbolGlyph($r('sys.symbol.chevron_right'))
-              .fontSize(14)
-              .fontColor([C.text2])
-          }
-          .onClick(() => this.m.setFilter(r.siteId))
-        }
-      }
-      .width('100%')
-
-      if (r.loading) {
-        Row({ space: Space.md }) {
-          ForEach([0, 1, 2, 3], (i: number) => {
-            Column() {
-              if (this.mode === 'room') {
-                RoomCardSkeleton()
-              } else {
-                Shimmer({ radius: Radius.lg })
-                  .height(72)
-              }
-            }
-            .width(this.mode === 'room' ? 260 : this.tileW)
-          }, (i: number) => `sk${i}`)
-        }
-        .width('100%')
-        .clip(true)
-      } else if (r.error.length > 0) {
-        Row({ space: 10 }) {
-          Text(r.error)
-            .fontSize(14)
-            .fontColor(C.text2)
-          Text('重试')
-            .fontSize(14)
-            .fontColor(C.accent)
-            .height(48)
-            .padding({ left: 12, right: 12 })
-            .onClick(() => this.m.retry(r))
-        }
-        .height(60)
-      } else if (r.count === 0) {
-        Text('没有找到相关结果')
-          .fontSize(14)
-          .fontColor(C.text3)
-          .height(48)
-      } else if (this.mode === 'room') {
-        List({ space: Space.md }) {
-          ForEach(r.rooms.slice(0, 12), (it: LiveRoomItem) => {
-            ListItem() {
-              RoomCard({ item: it, scope: 'search', showSite: false })
-                .width(260)
-            }
-          }, (it: LiveRoomItem) => `${it.siteId}_${it.roomId}`)
-        }
-        .listDirection(Axis.Horizontal)
-        .scrollBar(BarState.Off)
-        .height(210)
-        .width('100%')
-        .clip(false)
-      } else {
-        Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(Space.md), cross: LengthMetrics.vp(Space.md) } }) {
-          ForEach(r.anchors.slice(0, this.filter === 'all' ? 6 : 60), (a: LiveAnchorItem) => {
-            AnchorTile({
-              siteId: a.siteId,
-              roomId: a.roomId,
-              userName: a.userName,
-              avatar: a.avatar,
-              live: a.liveStatus,
-              subtitle: a.liveStatus ? '直播中' : `${SiteStyle.label(a.siteId)} · 未开播`
-            })
-              .width(this.tileW)
-          }, (a: LiveAnchorItem) => `${a.siteId}_${a.roomId}`)
-        }
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .transition(TransitionEffect.OPACITY.animation({ duration: 240 }))
   }
 
   @Builder
@@ -413,13 +317,21 @@ export struct SearchView {
             if (!this.searched) {
               this.historyBlock()
             } else if (this.filter === 'all') {
-              ForEach(this.results, (r: SiteResult) => {
-                this.siteRow(r)
-              }, (r: SiteResult) => `${this.keyword}_${this.mode}_${r.siteId}_${this.rev}`)
+              Repeat<SiteResult>(this.results)
+                .each((r: RepeatItem<SiteResult>) => {
+                  SearchSiteRow({ result: r.item, revision: r.item.revision, mode: this.mode,
+                    filter: this.filter, tileW: this.tileW,
+                    onMore: () => this.m.setFilter(r.item.siteId), onRetry: (result: SiteResult) => this.m.retry(result) })
+                })
+                .key((r: SiteResult) => `${this.keyword}_${this.mode}_${r.siteId}`)
             } else {
-              ForEach(this.results.filter((r: SiteResult) => r.siteId === this.filter), (r: SiteResult) => {
-                this.siteRow(r)
-              }, (r: SiteResult) => `${this.keyword}_${this.mode}_${r.siteId}_${this.rev}_only`)
+              Repeat<SiteResult>(this.results.filter((r: SiteResult) => r.siteId === this.filter))
+                .each((r: RepeatItem<SiteResult>) => {
+                  SearchSiteRow({ result: r.item, revision: r.item.revision, mode: this.mode,
+                    filter: this.filter, tileW: this.tileW,
+                    onMore: () => this.m.setFilter(r.item.siteId), onRetry: (result: SiteResult) => this.m.retry(result) })
+                })
+                .key((r: SiteResult) => `${this.keyword}_${this.mode}_${r.siteId}`)
             }
           }
           .width('100%')

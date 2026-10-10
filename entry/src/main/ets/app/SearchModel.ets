@@ -15,6 +15,8 @@ export class SiteResult {
   @Trace rooms: LiveRoomItem[] = [];
   @Trace anchors: LiveAnchorItem[] = [];
   @Trace hasMore: boolean = false;
+  /** Resync this row without replacing the other platform rows. */
+  @Trace revision: number = 0;
 
   constructor(siteId: SiteId) {
     this.siteId = siteId;
@@ -37,14 +39,13 @@ export class SearchModel {
   @Trace searched: boolean = false;
   /** Full paged feed used when a single platform is selected in room mode. */
   @Trace feed: RoomFeed | null = null;
-  /**
-   * Views must resync from this model: observing @Trace fields of a shared singleton is not
-   * reliable here, so every mutation pushes a notification instead.
-   */
+  /** Views explicitly resync the shared model; per-site revisions keep their row identities. */
   onUpdate: (() => void) | null = null;
   private seq: number = 0;
   private lastSearchAt: number = 0;
+  private submittedMode: SearchMode = 'room';
   private feedCache: Map<string, RoomFeed> = new Map<string, RoomFeed>();
+  private staleFeeds: Set<string> = new Set<string>();
 
   private notify(): void {
     this.onUpdate?.();
@@ -52,39 +53,39 @@ export class SearchModel {
 
   search(keyword: string, force: boolean = false): void {
     const kw = keyword.trim();
-    if (kw.length === 0) {
-      return;
-    }
-    if (!force && this.searched && kw === this.keyword && Date.now() - this.lastSearchAt < 15000 &&
-      this.results.every((r: SiteResult) => !r.loading && r.error.length === 0)) {
+    if (kw.length === 0) return;
+    const same = this.searched && kw === this.keyword && this.mode === this.submittedMode;
+    if (same && this.results.some((r: SiteResult) => r.loading)) return;
+    if (!force && same && Date.now() - this.lastSearchAt < 15000 &&
+      this.results.every((r: SiteResult) => r.error.length === 0)) {
       Settings.inst.addSearchHistory(kw);
       this.notify();
       return;
     }
-    this.feedCache.clear();
+    if (!same) {
+      this.feedCache.clear();
+      this.staleFeeds.clear();
+      this.results = Sites.ids.map((id: SiteId) => new SiteResult(id));
+    } else {
+      // Refresh the displayed feed now; other cached filters refresh when next displayed.
+      this.feedCache.forEach((_feed: RoomFeed, site: string) => this.staleFeeds.add(site));
+    }
     this.lastSearchAt = Date.now();
     this.keyword = kw;
+    this.submittedMode = this.mode;
     this.searched = true;
     Settings.inst.addSearchHistory(kw);
     const seq = ++this.seq;
-    this.results = Sites.ids.map((id: SiteId) => new SiteResult(id));
-    for (const r of this.results) {
-      this.runSite(r, kw, seq);
-    }
+    for (const r of this.results) this.runSite(r, kw, this.submittedMode, seq);
     this.rebuildFeed();
     this.notify();
   }
 
   setMode(m: SearchMode): void {
-    if (m === this.mode) {
-      return;
-    }
+    if (m === this.mode) return;
     this.mode = m;
-    if (this.searched) {
-      this.search(this.keyword, true);
-    } else {
-      this.notify();
-    }
+    if (this.searched) this.search(this.keyword, true);
+    else this.notify();
   }
 
   setFilter(f: string): void {
@@ -105,55 +106,52 @@ export class SearchModel {
       feed = new RoomFeed((page: number): Promise<RoomPage> => site.searchRooms(kw, page));
       this.feedCache.set(this.filter, feed);
       feed.load();
+    } else if (this.staleFeeds.delete(this.filter)) {
+      feed.load(true);
     }
     this.feed = feed;
   }
 
-  private async runSite(r: SiteResult, kw: string, seq: number): Promise<void> {
+  private async runSite(r: SiteResult, kw: string, mode: SearchMode, seq: number): Promise<void> {
     r.loading = true;
     r.error = '';
+    r.revision++;
     try {
       const site = Sites.of(r.siteId);
-      if (this.mode === 'room') {
+      if (mode === 'room') {
         const page: RoomPage = await site.searchRooms(kw, 1);
-        if (seq !== this.seq) {
-          return;
-        }
+        if (seq !== this.seq) return;
         r.rooms = page.items;
         r.hasMore = page.hasMore;
       } else {
         const page: AnchorPage = await site.searchAnchors(kw, 1);
-        if (seq !== this.seq) {
-          return;
-        }
-        // live anchors first
+        if (seq !== this.seq) return;
         r.anchors = page.items.slice().sort((a: LiveAnchorItem, b: LiveAnchorItem) =>
           (b.liveStatus ? 1 : 0) - (a.liveStatus ? 1 : 0));
         r.hasMore = page.hasMore;
       }
     } catch (e) {
       Log.w('search', `${r.siteId} failed: ${e}`);
-      if (seq === this.seq) {
-        r.error = '搜索失败';
-      }
+      if (seq === this.seq) r.error = '搜索失败';
     } finally {
       if (seq === this.seq) {
         r.loading = false;
+        r.revision++;
         this.notify();
       }
     }
   }
 
   retry(r: SiteResult): void {
-    r.loading = true;
-    r.error = '';
+    if (!this.searched || r.loading || this.results.indexOf(r) < 0) return;
+    this.runSite(r, this.keyword, this.submittedMode, this.seq);
     this.notify();
-    this.runSite(r, this.keyword, this.seq);
   }
 
   clear(): void {
     this.seq++;
     this.feedCache.clear();
+    this.staleFeeds.clear();
     this.keyword = '';
     this.searched = false;
     this.results = [];

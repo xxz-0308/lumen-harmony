@@ -103,6 +103,7 @@ export struct LiveRoomPage {
   private panSide: string = '';
   private lastMediaLevel: number = -1;
   private mediaWrite: Promise<boolean> = Promise.resolve(true);
+  private mediaIntent: number = 0;
   private pausedByBackground: boolean = false;
   private audioOwner: number = 0;
   private foregroundListener: () => void = () => this.onForeground();
@@ -495,6 +496,7 @@ export struct LiveRoomPage {
   }
 
   private changeVolume(v: number): void {
+    if (this.disposed) return;
     if (this.settings.volumeMode === 'app') {
       this.model.player.setVolume(v);
       this.settings.appVolume = v;
@@ -506,9 +508,13 @@ export struct LiveRoomPage {
       return;
     }
     this.lastMediaLevel = level;
-    this.mediaWrite = this.mediaWrite.then(() => MediaVolume.write(level));
+    const intent = ++this.mediaIntent;
+    const roomKey = `${this.model.siteId}_${this.model.roomId}`;
+    // Accepted system-volume writes remain ordered even if their originating page leaves.
+    this.mediaWrite = this.mediaWrite.then(() => MediaVolume.write(level)).catch(() => false);
     this.mediaWrite.then((ok: boolean) => {
-      if (!ok && this.settings.volumeMode === 'media') {
+      if (!ok && !this.disposed && intent === this.mediaIntent &&
+        roomKey === `${this.model.siteId}_${this.model.roomId}` && this.settings.volumeMode === 'media') {
         this.settings.volumeMode = 'app';
         this.model.player.setVolume(this.settings.appVolume);
         this.settings.scheduleSave();
