@@ -2,12 +2,12 @@
 
 当前发布包使用 ohpm 的 `@ohos/ijkplayer@2.0.11`，ARM64 动态库未经 Lumen 修改。为方便取得相应源码和保留许可，本次 Release 除应用源码外，另提供：
 
-[`Lumen-1.0.1-native-sources.tar.gz`](https://github.com/xxz-0308/lumen-harmony/releases/download/v1.0.1/Lumen-1.0.1-native-sources.tar.gz)
+[`Lumen-1.1.0-native-sources.tar.gz`](https://github.com/xxz-0308/lumen-harmony/releases/download/v1.1.0/Lumen-1.1.0-native-sources.tar.gz)
 
 该归档的 SHA-256：
 
 ```text
-1169d72c868dba765f3ff665fa51391ff0de152967e2d700b70cbfe1d51171e4
+eff7d60d3cc157ddb8c3eb53c1d0f327b533a14f1309c6d4793fdcf2458c0809
 ```
 
 机器可读的版本、来源与分组件归档校验值见 [native-sources.json](native-sources.json)。所有源码归档保留各自版权、许可与构建文档，不包含 Git 历史或开发者的 SDK / 签名资料。
