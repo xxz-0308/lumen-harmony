@@ -24,6 +24,8 @@ export class AppEnv {
   @Trace isDark: boolean = true;
   @Trace statusBarHeight: number = 0;
   @Trace navBarHeight: number = 0;
+  @Trace keyboardHeight: number = 0;
+  @Trace fontScale: number = 1;
   @Trace winWidth: number = 1200;
   @Trace winHeight: number = 800;
   @Trace foreground: boolean = true;
@@ -51,6 +53,7 @@ export class AppEnv {
 
   static init(ctx: common.UIAbilityContext): void {
     AppEnv.inst.context = ctx;
+    AppEnv.inst.fontScale = ctx.config.fontSizeScale ?? 1;
     AppEnv.inst.systemDark =
       ctx.config.colorMode !== ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
     AppEnv.inst.resolveDark();
@@ -91,6 +94,7 @@ export class AppEnv {
     }
     AppEnv.inst.stopWatchingMotion();
     AppEnv.inst.win = null;
+    AppEnv.inst.keyboardHeight = 0;
     AppEnv.setWindowVisible(false);
   }
 
@@ -142,6 +146,7 @@ export class AppEnv {
   }
 
   static syncSystemColorMode(config: Configuration): void {
+    if (config.fontSizeScale !== undefined) AppEnv.inst.fontScale = config.fontSizeScale;
     // The ability callback's newConfig is authoritative; ctx.config may still hold the old mode.
     if (AppEnv.inst.themeMode === ThemeMode.System) {
       AppEnv.inst.systemDark = config.colorMode !== ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
@@ -186,6 +191,12 @@ export class AppEnv {
     const nav = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
     this.statusBarHeight = this.px2vp(sys.topRect.height);
     this.navBarHeight = this.px2vp(nav.bottomRect.height);
+    try {
+      const keyboard = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD);
+      this.keyboardHeight = this.px2vp(keyboard.bottomRect.height);
+    } catch (e) {
+      this.keyboardHeight = 0;
+    }
   }
 
   private updateSize(wPx: number, hPx: number): void {

@@ -7,6 +7,7 @@ import {
   DanmakuSettingsPanel,
   LiveFollowList,
   OptionList,
+  OptionChoice,
   RoomInfo,
   ScCardView,
   SideChatOverlay
@@ -24,8 +25,8 @@ import { BackgroundAudio } from '../platform/BackgroundAudio';
 import { LivePip } from '../platform/LivePip';
 import { Log } from '../util/Log';
 import { isNarrowTheater, showTheaterPanel } from '../room/TheaterLayout';
-
-type SheetKind = '' | 'quality' | 'line' | 'danmaku' | 'follows' | 'sleep';
+import { RoomSheet } from '../room/RoomSheets';
+import { layoutRoomSheet, RoomSheetLayout, SheetKind } from '../room/RoomSheetLayout';
 
 const INFO_H: number = 84;
 const GAP: number = 20;
@@ -1251,7 +1252,7 @@ export struct LiveRoomPage {
           this.model.selectQuality(i);
         }
       })
-        .height(Math.min(this.sheetOptionCount * 52, this.sheetCardMaxH - 62))
+        .height(Math.min(this.sheetOptionCount * this.sheetLayout.rowH, this.sheetLayout.bodyH))
     } else if (this.sheet === 'line') {
       OptionList({
         options: this.model.lines.map((u: string, i: number) => `线路 ${i + 1}${u.indexOf('.m3u8') >= 0 ? ' · HLS' : ''}`),
@@ -1261,47 +1262,52 @@ export struct LiveRoomPage {
           this.model.selectLine(i);
         }
       })
-        .height(Math.min(this.sheetOptionCount * 52, this.sheetCardMaxH - 62))
+        .height(Math.min(this.sheetOptionCount * this.sheetLayout.rowH, this.sheetLayout.bodyH))
     } else if (this.sheet === 'danmaku') {
       DanmakuSettingsPanel({ onChange: () => this.syncSettings() })
-        .height(Math.max(0, Math.min(560, this.sheetCardMaxH - 62)))
+        .height(Math.min(560, this.sheetLayout.bodyH))
     } else if (this.sheet === 'sleep') {
-      Column({ space: 12 }) {
-        OptionList({
-          options: ['关闭定时', '15 分钟', '30 分钟', '60 分钟', '90 分钟'],
-          selected: [0, 15, 30, 60, 90].indexOf(this.sleepMinutes),
-          onPick: (i: number) => this.setSleep([0, 15, 30, 60, 90][i])
-        })
-          .height(5 * 52)
-        Row({ space: 10 }) {
-          TextInput({ text: this.sleepInput, placeholder: '自定义分钟（1–720）' })
-            .type(InputType.Number)
-            .layoutWeight(1)
-            .height(44)
-            .backgroundColor('#26FFFFFF')
-            .fontColor(C.onMedia)
-            .onChange((value: string) => {
-              this.sleepInput = value;
-            })
-          Button('开始')
-            .height(44)
-            .backgroundColor(C.accent)
-            .onClick(() => {
-              const minutes = Number(this.sleepInput);
-              if (!/^\d{1,3}$/.test(this.sleepInput) || minutes < 1 || minutes > 720) {
-                promptAction.showToast({ message: '请输入 1–720 分钟' });
-                return;
-              }
-              this.setSleep(minutes);
-            })
+      List({ space: 4 }) {
+        ForEach([0, 15, 30, 60, 90], (minutes: number) => {
+          ListItem() {
+            OptionChoice({ label: minutes === 0 ? '关闭定时' : `${minutes} 分钟`,
+              selected: this.sleepMinutes === minutes, onPick: () => this.setSleep(minutes) })
+          }
+        }, (minutes: number) => `${minutes}`)
+        ListItem() {
+          Row({ space: 10 }) {
+            TextInput({ text: this.sleepInput, placeholder: '自定义分钟（1–720）' })
+              .id('sleep_minutes')
+              .type(InputType.Number).layoutWeight(1)
+              .constraintSize({ minHeight: 44 })
+              .backgroundColor('#26FFFFFF').fontColor(C.onMedia)
+              .onChange((value: string) => { this.sleepInput = value; })
+            Button('开始')
+              .id('sleep_start')
+              .constraintSize({ minHeight: 44 }).backgroundColor(C.accent)
+              .onClick(() => {
+                const minutes = Number(this.sleepInput);
+                if (!/^\d{1,3}$/.test(this.sleepInput) || minutes < 1 || minutes > 720) {
+                  promptAction.showToast({ message: '请输入 1–720 分钟' });
+                  return;
+                }
+                this.setSleep(minutes);
+              })
+          }
+          .padding({ left: 4, right: 4 })
+          .margin({ top: 12 })
         }
-        .padding({ left: 12, right: 12 })
-        Text('时间到后结束播放并返回上一页')
-          .fontSize(12)
-          .fontColor(C.onMedia2)
-          .padding({ left: 16 })
+        ListItem() {
+          Text('时间到后结束播放并返回上一页')
+            .fontSize(12).fontColor(C.onMedia2)
+            .padding({ left: 8 }).margin({ top: 8 })
+        }
       }
       .width('100%')
+      .height(Math.min(this.sheetLayout.bodyH, 342 * Math.max(1, this.env.fontScale)))
+      .padding({ left: 8, right: 8 })
+      .contentEndOffset(4)
+      .scrollBar(BarState.Off)
     } else if (this.sheet === 'follows') {
       LiveFollowList({
         currentKey: `${this.model.siteId}_${this.model.roomId}`,
@@ -1341,118 +1347,22 @@ export struct LiveRoomPage {
     }
   }
 
-  get sheetCardW(): number {
-    return Math.min(this.sheet === 'danmaku' ? 380 : 300, Math.max(0, this.rootW - 24));
-  }
-
-  /** The card's bottom edge sits just above the touched control. */
-  get sheetCardBottom(): number {
-    const touched = this.sheetAnchorY > 0 ? this.sheetAnchorY - 30 : this.rootH - 96;
-    return Math.max(this.topInset + 160, Math.min(touched, this.rootH - 24));
-  }
-
-  get sheetCardMaxH(): number {
-    return Math.min(this.rootH * 0.6, this.sheetCardBottom - this.topInset);
-  }
-
-  get sheetCardX(): number {
-    const w = this.sheetCardW;
-    const center = this.sheetAnchorX > 0 ? this.sheetAnchorX : this.rootW / 2;
-    return Math.max(12, Math.min(center - w / 2, this.rootW - w - 12));
-  }
-
-  get followPanelW(): number {
-    return this.narrow ? Math.min(380, Math.max(0, this.rootW - 24)) : Math.min(380, this.rootW * 0.4);
-  }
-
-  @Builder
-  sheetHeader() {
-    Row() {
-      Text(this.sheetTitle)
-        .fontSize(15)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(C.onMedia)
-      Blank()
-      if (this.sheet === 'follows') {
-        IconButton({ dim: 40,
-          icon: $r('sys.symbol.arrow_clockwise'), tint: C.onMedia, iconSize: 17, label: '刷新',
-          onTap: () => {
-            FollowStore.inst.refreshAll(true);
-          }
-        })
-        IconButton({ dim: 40,
-          icon: $r('sys.symbol.xmark'), tint: C.onMedia, iconSize: 17, label: '关闭',
-          onTap: () => this.closeSheet()
-        })
-      }
-    }
-    .width('100%')
-    .height(52)
-    .padding({ left: 18, right: 8 })
+  @Computed
+  get sheetLayout(): RoomSheetLayout {
+    return layoutRoomSheet({ kind: this.sheet, width: this.rootW, height: this.rootH,
+      topInset: this.topInset, navInset: this.env.navBarHeight, anchorX: this.sheetAnchorX, anchorY: this.sheetAnchorY,
+      fontScale: this.env.fontScale, keyboardHeight: this.env.keyboardHeight, windowHeight: this.env.winHeight });
   }
 
   @Builder
   sheetLayer() {
     if (this.sheet !== '') {
-      Stack({ alignContent: Alignment.TopStart }) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#33000000')
-          .transition(TransitionEffect.OPACITY)
-          .onClick(() => this.closeSheet())
-        if (this.sheet === 'follows') {
-          // The follow list is long: a full-height side panel, but inset and rounded.
-          Column() {
-            this.sheetHeader()
-            Column() {
-              this.sheetContent()
-            }
-            .layoutWeight(1)
-            .width('100%')
-          }
-          .width(this.followPanelW)
-          .height(Math.max(0, this.rootH - this.topInset - 12 - this.env.navBarHeight))
-          .position({ x: this.rootW - this.followPanelW - 12, y: this.topInset })
-          .borderRadius(Radius.xl)
-          .backgroundColor('#A6121216')
-          .backgroundBlurStyle(BlurStyle.Thick)
-          .borderWidth(1)
-          .borderColor('#1FFFFFFF')
-          .shadow({ radius: 28, color: '#4D000000', offsetY: 8 })
-          .clip(true)
-          .transition(TransitionEffect.translate({ x: 60 }).combine(TransitionEffect.OPACITY))
-          .gesture(PanGesture({ direction: PanDirection.Right, distance: 30 })
-            .onActionEnd(() => this.closeSheet()))
-        } else {
-          // Floating card above the control that opened it; taps beside it reach the scrim.
-          Column() {
-            Column() {
-              this.sheetHeader()
-              this.sheetContent()
-            }
-            .width(this.sheetCardW)
-            .constraintSize({ maxHeight: this.sheetCardMaxH })
-            .padding({ bottom: 10 })
-            .borderRadius(Radius.xl)
-            .backgroundColor('#99121216')
-            .backgroundBlurStyle(BlurStyle.Thick)
-            .borderWidth(1)
-            .borderColor('#24FFFFFF')
-            .shadow({ radius: 32, color: '#59000000', offsetY: 10 })
-            .clip(true)
-            .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.9, y: 0.9,
-              centerY: '100%' })).animation({ duration: this.env.reduceMotion ? 0 : 220, curve: Motion.snappy }))
-          }
-          .width(this.sheetCardW)
-          .height(this.sheetCardBottom)
-          .justifyContent(FlexAlign.End)
-          .position({ x: this.sheetCardX, y: 0 })
-          .hitTestBehavior(HitTestMode.Transparent)
-        }
+      RoomSheet({ title: this.sheetTitle, layout: this.sheetLayout, reduceMotion: this.env.reduceMotion,
+        onClose: () => this.closeSheet(), onRefresh: () => {
+          if (!this.disposed) FollowStore.inst.refreshAll(true);
+        } }) {
+        this.sheetContent()
       }
-      .width('100%')
-      .height('100%')
     }
   }
 

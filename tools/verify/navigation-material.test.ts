@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { deviceInfo } from './kit-device';
+import { LiveRoomItem } from '../../entry/src/main/ets/core/model/Models';
 
 class FakeStack {
   paths: { name: string; param?: any }[] = [];
@@ -41,8 +42,12 @@ Nav.back(); Nav.openAccount(); Nav.openAccount();
 assert.deepEqual(stack.getAllPathName(), [Routes.account]);
 Nav.back();
 AppEnv.inst.reduceMotion = true;
-Nav.openLive({ siteId: 'huya', roomId: 'three' } as any, 'hero-three');
-assert.equal(stack.paths[0].param.heroId, '', 'reduced motion strips hero even if a caller supplies one');
+const preview = LiveRoomItem.of('huya', 'three', 'fixture', '', 'fixture', 1);
+Nav.openLive(preview, [10, 20, 160, 90]);
+assert.equal('heroId' in stack.paths[0].param, false, 'the removed shared-hero parameter is not recreated');
+assert.equal(stack.paths[0].param.preview, preview);
+assert.deepEqual([stack.paths[0].param.coverX, stack.paths[0].param.coverY, stack.paths[0].param.coverW, stack.paths[0].param.coverH],
+  [10, 20, 160, 90], 'the destination owns reduced motion; route geometry remains valid');
 Nav.back();
 
 const { C, Layout, Radius } = await import('../../entry/src/main/ets/theme/Theme');

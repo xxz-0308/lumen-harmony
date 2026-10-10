@@ -40,4 +40,19 @@ AppEnv.detachWindow();
 assert.equal(motionListeners.size, 0);
 setMotionReduced(true);
 assert.equal(AppEnv.inst.reduceMotion, false, 'detached window does not receive animation changes');
-console.log('AppEnv: foreground arbitration, system reduced motion and listener cleanup passed');
+AppEnv.init({ config: { colorMode: 0, fontSizeScale: 1.5 } } as never);
+assert.equal(AppEnv.inst.fontScale, 1.5);
+AppEnv.syncSystemColorMode({ colorMode: 0, fontSizeScale: 2 } as never); assert.equal(AppEnv.inst.fontScale, 2);
+const callbacks = new Map<string, (...args: any[]) => void>(); let keyboardPixels = 400;
+const win = {
+  setWindowLayoutFullScreen() {}, setWindowSystemBarProperties() {},
+  on(name: string, callback: (...args: any[]) => void) { callbacks.set(name, callback); },
+  off(name: string) { callbacks.delete(name); },
+  getWindowProperties: () => ({ windowRect: { width: 2400, height: 1600 } }),
+  getWindowAvoidArea: (type: number) => ({ topRect: { height: type === 0 ? 48 : 0 },
+    bottomRect: { height: type === 3 ? keyboardPixels : type === 4 ? 24 : 0 } })
+};
+AppEnv.attachWindow(win as never); assert.equal(AppEnv.inst.keyboardHeight, 200);
+keyboardPixels = 0; callbacks.get('avoidAreaChange')!(); assert.equal(AppEnv.inst.keyboardHeight, 0);
+AppEnv.detachWindow(); assert.equal(AppEnv.inst.keyboardHeight, 0); assert.equal(callbacks.size, 0);
+console.log('AppEnv: foreground/motion ownership, font configuration and keyboard avoid-area cleanup passed');
