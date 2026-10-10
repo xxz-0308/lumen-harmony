@@ -109,7 +109,7 @@ struct Index {
     }
     if (key === 'category' && this.visited.indexOf('category') >= 0) {
       SectionHost({ active: this.section === 'category' }) {
-        CategoryView()
+        CategoryView({ active: this.section === 'category' && this.rootShown && this.env.foreground })
       }
     }
     if (key === 'follow' && this.visited.indexOf('follow') >= 0) {

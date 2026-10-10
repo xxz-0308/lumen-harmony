@@ -467,8 +467,9 @@ export struct LiveRoomPage {
   }
 
   private toggleControls(): void {
+    if (this.disposed) return;
     if (this.sheet !== '') {
-      this.sheet = '';
+      this.closeSheet();
       return;
     }
     this.controls = !this.controls;
@@ -478,6 +479,7 @@ export struct LiveRoomPage {
   }
 
   private openSheet(kind: SheetKind): void {
+    if (this.disposed) return;
     this.getUIContext().animateTo({ curve: Motion.smooth }, () => {
       this.sheet = kind;
     });
@@ -489,6 +491,7 @@ export struct LiveRoomPage {
   }
 
   private closeSheet(): void {
+    if (this.disposed) return;
     this.getUIContext().animateTo({ curve: Motion.smooth }, () => {
       this.sheet = '';
     });
@@ -873,7 +876,7 @@ export struct LiveRoomPage {
       if (this.fullscreen) {
         IconButton({ dim: 44,
           icon: this.followed ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
-          glass: true, active: this.followed, label: this.followed ? '已关注' : '关注',
+          glass: true, active: this.followed, toggleState: true, label: this.followed ? '已关注' : '关注',
           onTap: () => this.toggleFollow()
         })
         IconButton({ dim: 44,
@@ -947,7 +950,7 @@ export struct LiveRoomPage {
       })
       IconButton({ dim: 44,
         icon: this.danmakuEnabled ? $r('sys.symbol.ellipsis_message') : $r('sys.symbol.ellipsis_message_slash'),
-        glass: true, active: this.danmakuEnabled, label: this.danmakuEnabled ? '关闭弹幕' : '开启弹幕', onTap: () => {
+        glass: true, active: this.danmakuEnabled, toggleState: true, label: this.danmakuEnabled ? '关闭弹幕' : '开启弹幕', onTap: () => {
           this.danmakuEnabled = !this.danmakuEnabled;
           this.settings.danmakuOn = this.danmakuEnabled;
           this.settings.scheduleSave();
@@ -1164,7 +1167,7 @@ export struct LiveRoomPage {
     Row({ space: 8 }) {
       IconButton({ dim: 44,
         icon: this.followed ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
-        active: this.followed, label: this.followed ? '已关注' : '关注',
+        active: this.followed, toggleState: true, label: this.followed ? '已关注' : '关注',
         onTap: () => this.toggleFollow()
       })
       IconButton({ dim: 44,

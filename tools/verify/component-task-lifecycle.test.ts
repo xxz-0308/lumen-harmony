@@ -12,7 +12,8 @@ async function logicStruct(file: string, name: string, end: string, mocks: Recor
   assert.ok(start >= marker.length);
   let body = src.slice(start, src.indexOf(end, start));
   body = body.replace(/^\s*@(Param|Local|Event|BuilderParam)\s+/gm, '\n  ')
-    .replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n');
+    .replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n')
+    .replace(/^\s*@Computed\s*\n/gm, '\n');
   const constants = (src.match(/^const (INFO_H|GAP): number = \d+;/gm) ?? []).join('\n');
   const key = `__fixture_${name}`;
   (globalThis as any)[key] = mocks;
@@ -82,7 +83,7 @@ try {
     Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
-    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2},
+    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0},
     isNarrowTheater:(w:number)=>w<900, showTheaterPanel:()=>true
   });
   const fresh = () => {
@@ -221,7 +222,45 @@ try {
   glow.active=true;glow.onSrc();glowTasks.get('B')!.resolve(sharedGlow);await flush();assert.equal(glow.front,sharedGlow);
   glow.strength=0;glow.src='C';glow.onSrc();assert.deepEqual(glowLoads,['A','B']);
   glow.strength=1;glow.onSrc();glow.aboutToDisappear();glowTasks.get('C')!.resolve({});await flush();assert.equal(glow.front,sharedGlow);
-  console.log('Component tasks: callback ownership, accepted volume intent, retained snapshots and offscreen shared glow passed');
+  const categorySettings={categorySite:'huya',scheduleSave:()=>{}};
+  const categoryEnv={reduceMotion:false};
+  class ListScroller {
+    y=0;limit=1000;indexes:number[]=[];
+    currentOffset(){return{yOffset:this.y,xOffset:0};}
+    scrollTo(options:{yOffset:number}){this.y=Math.min(options.yOffset,this.limit);}
+    scrollToIndex(index:number){this.indexes.push(index);}
+  }
+  const categories={groups:[{id:'section',name:'fixture',children:[]}],loading:false};
+  const Category=await logicStruct('../../../entry/src/main/ets/views/CategoryView.ets','CategoryView','  @Builder\n  trailing()',{
+    Settings:{inst:categorySettings},AppEnv:{inst:categoryEnv},ListScroller,
+    Sites:{ids:['huya','douyu','bilibili']},CategoryStore:{favorites:()=>[],of:()=>categories,ensure:()=>{},subscribeFavorites:()=>{},unsubscribeFavorites:()=>{}},
+    Section:class{key='';title='';items=[];},FAV_KEY:'__fav__',Curve:{EaseIn:0},Motion:{snappy:0},ScrollAlign:{START:0}
+  });
+  const completions:(()=>void)[]=[];
+  const freshCategory=()=>{const view=new Category();view.getUIContext=()=>({animateTo:(options:any,change:()=>void)=>{
+    if(options.onFinish)completions.push(options.onFinish);change();
+  }});view.aboutToAppear();view.listReady=true;view.listY=321;view.scroller.y=321;return view;};
+  let category=freshCategory();category.selectSite(1);category.selectSite(2);
+  assert.equal(category.selectedSite,'bilibili');assert.equal(categorySettings.categorySite,'bilibili');
+  completions[0]();assert.equal(category.site,'huya');completions[1]();assert.equal(category.site,'bilibili');
+  category.scroller.limit=128;clock.advance(0);assert.equal(category.scroller.y,128);assert.equal(category.listY,128);
+  assert.deepEqual(category.scroller.indexes,[],'platform switches do not scroll to a fixed index');
+  completions.length=0;categorySettings.categorySite='huya';category=freshCategory();
+  category.selectSite(1);const cancelled=completions[0];category.selectSite(0);cancelled();
+  assert.equal(category.site,'huya');assert.equal(category.contentX,0);assert.equal(category.contentFade,1);
+  category.selectSite(1);const backgrounded=completions.at(-1)!;category.active=false;category.onActive();backgrounded();
+  assert.equal(category.site,'douyu');assert.equal(category.contentFade,1);
+  category.active=true;category.onActive();category.listReady=true;category.alignWhenReady();clock.advance(0);
+  assert.equal(category.scroller.y,321,'accepted selection resumes with the shared current offset');
+  category.pendingY=600;category.alignWhenReady();category.jump(0);clock.advance(0);assert.equal(category.pendingY,-1);
+  category.selectSite(2);const departed=completions.at(-1)!;category.aboutToDisappear();departed();assert.equal(category.site,'douyu');
+  categoryEnv.reduceMotion=true;categorySettings.categorySite='huya';category=freshCategory();category.selectSite(2);clock.advance(0);
+  assert.equal(category.site,'bilibili');assert.equal(category.contentFade,1);category.aboutToDisappear();
+
+  p=fresh();let dismissals=0;p.getUIContext=()=>({animateTo:(_options:any,change:()=>void)=>change()});p.armHide=()=>dismissals++;
+  p.sheet='quality';p.toggleControls();assert.equal(p.sheet,'');assert.equal(dismissals,1);
+  p.disposeRoom('navigation');p.openSheet('line');assert.equal(p.sheet,'');
+  console.log('Component tasks: lifecycle, current intent, retained state, category reversal and unified dismissal passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

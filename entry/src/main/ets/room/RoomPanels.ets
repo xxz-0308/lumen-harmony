@@ -562,6 +562,40 @@ export struct DanmakuSettingsPanel {
   }
 }
 
+/** A native selectable action shared by option lists and the bounded sleep form. */
+@ComponentV2
+export struct OptionChoice {
+  @Param label: string = '';
+  @Param selected: boolean = false;
+  @Event onPick: () => void = () => {};
+
+  build() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: 10 }) {
+        Row().width(6).height(6).borderRadius(Radius.pill)
+          .backgroundColor(this.selected ? C.accent : Color.Transparent)
+        Text(this.label)
+          .fontSize(15)
+          .fontWeight(this.selected ? FontWeight.Bold : FontWeight.Regular)
+          .fontColor(this.selected ? C.accent : C.onMedia)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .constraintSize({ minHeight: 48 })
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    }
+    .width('100%')
+    .padding(0)
+    .borderRadius(Radius.md)
+    .stateStyles({ normal: { .backgroundColor(Color.Transparent) }, pressed: { .backgroundColor('#1AFFFFFF') } })
+    .accessibilityText(this.label)
+    .accessibilitySelected(this.selected)
+    .onClick(() => this.onPick())
+  }
+}
+
 /** Selectable list used for quality / line choice. */
 @ComponentV2
 export struct OptionList {
@@ -574,30 +608,7 @@ export struct OptionList {
     List({ space: 4 }) {
       ForEach(this.options, (label: string, i: number) => {
         ListItem() {
-          Row({ space: 10 }) {
-            // The current choice is marked by an accent dot and text, not a filled block.
-            Row()
-              .width(6)
-              .height(6)
-              .borderRadius(Radius.pill)
-              .backgroundColor(i === this.selected ? C.accent : Color.Transparent)
-            Text(label)
-              .fontSize(15)
-              .fontWeight(i === this.selected ? FontWeight.Bold : FontWeight.Regular)
-              .fontColor(i === this.selected ? C.accent : C.onMedia)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .height(48)
-          .padding({ left: 14, right: 14 })
-          .borderRadius(Radius.md)
-          .stateStyles({
-            normal: { .backgroundColor(Color.Transparent) },
-            pressed: { .backgroundColor('#1AFFFFFF') }
-          })
-          .onClick(() => this.onPick(i))
+          OptionChoice({ label: label, selected: i === this.selected, onPick: () => this.onPick(i) })
         }
       }, (label: string, i: number) => `${i}_${label}`)
     }

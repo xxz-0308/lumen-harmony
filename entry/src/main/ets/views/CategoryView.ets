@@ -77,7 +77,8 @@ export struct SubCategoryTile {
     .padding({ top: 10, bottom: 10 })
     .borderRadius(Radius.md)
     .backgroundColor(this.pressed ? C.surface2 : Color.Transparent)
-    .scale({ x: this.pressed ? 0.94 : 1, y: this.pressed ? 0.94 : 1 })
+    .scale({ x: this.pressed && !AppEnv.inst.reduceMotion ? 0.94 : 1,
+      y: this.pressed && !AppEnv.inst.reduceMotion ? 0.94 : 1 })
     .animation({ curve: Motion.snappy })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
@@ -96,7 +97,15 @@ export struct SubCategoryTile {
 
 @ComponentV2
 export struct CategoryView {
+  @Param active: boolean = true;
   @Local site: SiteId = Settings.inst.categorySite;
+  @Local selectedSite: SiteId = Settings.inst.categorySite;
+  private mounted: boolean = false;
+  private switchSeq: number = 0;
+  private listY: number = 0;
+  private pendingY: number = -1;
+  private listReady: boolean = false;
+  private alignTimer: number = -1;
   @Local activeKey: string = '';
   @Local favorites: LiveSubCategory[] = CategoryStore.favorites();
   private scroller: ListScroller = new ListScroller();
@@ -104,7 +113,7 @@ export struct CategoryView {
   private visibleKey: string = '';
   private railTimer: number = -1;
   private onFavoritesChanged: () => void = () => {
-    this.favorites = CategoryStore.favorites();
+    if (this.mounted && this.active) this.favorites = CategoryStore.favorites();
   };
 
   @Computed
@@ -134,17 +143,63 @@ export struct CategoryView {
   }
 
   aboutToAppear(): void {
+    this.mounted = true;
+    this.site = this.selectedSite;
     CategoryStore.subscribeFavorites(this.onFavoritesChanged);
     this.onFavoritesChanged();
     CategoryStore.ensure(this.site);
   }
 
   aboutToDisappear(): void {
+    this.mounted = false;
+    this.switchSeq++;
+    this.clearAlignment();
     CategoryStore.unsubscribeFavorites(this.onFavoritesChanged);
     if (this.railTimer >= 0) {
       clearTimeout(this.railTimer);
       this.railTimer = -1;
     }
+  }
+
+  @Monitor('active')
+  onActive(): void {
+    if (!this.active) {
+      this.switchSeq++;
+      this.clearAlignment();
+      this.listReady = false;
+      if (this.railTimer >= 0) clearTimeout(this.railTimer);
+      this.railTimer = -1;
+      this.pendingRail = '';
+      if (this.mounted && this.site !== this.selectedSite) this.applySite(this.selectedSite);
+      this.contentX = 0;
+      this.contentFade = 1;
+    } else {
+      this.onFavoritesChanged();
+    }
+  }
+
+  @Monitor('sections')
+  onSections(): void {
+    this.alignWhenReady();
+  }
+
+  private clearAlignment(): void {
+    if (this.alignTimer >= 0) clearTimeout(this.alignTimer);
+    this.alignTimer = -1;
+  }
+
+  private alignWhenReady(): void {
+    if (!this.mounted || !this.active || !this.listReady || this.pendingY < 0 || this.data.groups.length === 0) return;
+    this.clearAlignment();
+    const seq = this.switchSeq;
+    this.alignTimer = setTimeout(() => {
+      this.alignTimer = -1;
+      if (!this.mounted || !this.active || !this.listReady || seq !== this.switchSeq || this.pendingY < 0) return;
+      const y = this.pendingY;
+      this.pendingY = -1;
+      this.scroller.scrollTo({ xOffset: 0, yOffset: y, animation: false });
+      this.listY = Math.max(0, this.scroller.currentOffset().yOffset);
+    }, 0);
   }
 
   /** Slide offset and fade of the category content while switching platforms. */
@@ -153,33 +208,41 @@ export struct CategoryView {
 
   private selectSite(i: number): void {
     const next = Sites.ids[i];
-    if (next === this.site) {
+    if (!this.mounted || !this.active || next === undefined || next === this.selectedSite) return;
+    const seq = ++this.switchSeq;
+    this.clearAlignment();
+    this.selectedSite = next;
+    Settings.inst.categorySite = next;
+    Settings.inst.scheduleSave();
+    CategoryStore.ensure(next);
+    if (AppEnv.inst.reduceMotion || next === this.site) {
+      if (next !== this.site) this.applySite(next);
+      this.getUIContext().animateTo({ duration: AppEnv.inst.reduceMotion ? 0 : 220, curve: Motion.snappy }, () => {
+        this.contentX = 0;
+        this.contentFade = 1;
+      });
       return;
     }
-    if (AppEnv.inst.reduceMotion) {
-      this.applySite(next);
-      return;
-    }
-    // Out toward the old platform's side, swap the data, then in from the new platform's side.
     const dir = i > Sites.ids.indexOf(this.site) ? 1 : -1;
-    this.getUIContext().animateTo({ duration: 120, curve: Curve.EaseIn, onFinish: () => {
+    this.getUIContext().animateTo({ duration: 100, curve: Curve.EaseIn, onFinish: () => {
+      if (!this.mounted || !this.active || seq !== this.switchSeq) return;
       this.applySite(next);
-      this.contentX = 36 * dir;
-      this.getUIContext().animateTo({ duration: 240, curve: Motion.smooth }, () => {
+      this.contentX = 28 * dir;
+      this.getUIContext().animateTo({ duration: 220, curve: Motion.snappy }, () => {
         this.contentX = 0;
         this.contentFade = 1;
       });
     } }, () => {
-      this.contentX = -36 * dir;
+      this.contentX = -28 * dir;
       this.contentFade = 0;
     });
   }
 
   private applySite(next: SiteId): void {
+    this.pendingY = this.listY;
     this.site = next;
     CategoryStore.ensure(this.site);
-    Settings.inst.categorySite = this.site;
-    Settings.inst.scheduleSave();
+    if (this.data.groups.length === 0) this.listReady = false;
     this.activeKey = '';
     this.pendingRail = '';
     this.visibleKey = '';
@@ -187,10 +250,13 @@ export struct CategoryView {
       clearTimeout(this.railTimer);
       this.railTimer = -1;
     }
-    this.scroller.scrollToIndex(0);
+    this.alignWhenReady();
   }
 
   private jump(index: number): void {
+    if (!this.mounted || !this.active || index < 0 || index >= this.sections.length) return;
+    this.pendingY = -1;
+    this.clearAlignment();
     const target = this.sections[index].key;
     this.activeKey = target;
     this.pendingRail = target;
@@ -212,7 +278,7 @@ export struct CategoryView {
     Segmented({
       glass: true,
       items: ['虎牙', '斗鱼', 'B站'],
-      selected: Sites.ids.indexOf(this.site),
+      selected: Sites.ids.indexOf(this.selectedSite),
       onSelect: (i: number) => this.selectSite(i)
     })
   }
@@ -325,7 +391,16 @@ export struct CategoryView {
             .scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring)
             .contentEndOffset(Layout.bottomNavInset)
+            .onVisibleAreaChange([0], (visible: boolean) => {
+              this.listReady = visible;
+              if (visible) this.alignWhenReady();
+            })
+            .onDidScroll(() => {
+              if (this.active && this.pendingY < 0) this.listY = Math.max(0, this.scroller.currentOffset().yOffset);
+            })
             .onScrollIndex((start: number) => {
+              if (!this.mounted || !this.active) return;
+              this.alignWhenReady();
               if (start >= 0 && start < this.sections.length) {
                 const key = this.sections[start].key;
                 this.visibleKey = key;
@@ -342,6 +417,8 @@ export struct CategoryView {
             })
             .onTouch((e: TouchEvent) => {
               if (e.type === TouchType.Down) {
+                this.pendingY = -1;
+                this.clearAlignment();
                 this.pendingRail = '';
                 if (this.railTimer >= 0) {
                   clearTimeout(this.railTimer);

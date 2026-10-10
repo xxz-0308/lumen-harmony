@@ -344,6 +344,7 @@ export struct IconButton {
   @Param glass: boolean = false;
   @Param tint: ResourceColor = C.text1;
   @Param active: boolean = false;
+  @Param toggleState: boolean = false;
   @Param label: string = '';
   @Event onTap: () => void = () => {
   };
@@ -373,6 +374,7 @@ export struct IconButton {
       y: this.pressed && !AppEnv.inst.reduceMotion ? 0.96 : 1 })
     .animation({ curve: Motion.snappy })
     .accessibilityText(this.label)
+    .accessibilitySelected(this.toggleState ? this.active : undefined)
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
