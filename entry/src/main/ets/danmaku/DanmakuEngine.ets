@@ -108,7 +108,7 @@ export class DanmakuEngine {
       return;
     }
     const b = new Bullet();
-    b.text = text.length > 40 ? text.substring(0, 40) + '…' : text;
+    b.text = text;
     b.color = Settings.inst.danmakuKeepColor ? cssColor(color) : '#FFFFFF';
     this.ctx.font = `bold ${this.fontSize}vp sans-serif`;
     b.width = this.ctx.measureText(b.text).width;

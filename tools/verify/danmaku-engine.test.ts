@@ -10,7 +10,8 @@ const updating = process.env.UPDATE_DANMAKU_TRACE === '1';
 const fixture = new URL('../fixtures/danmaku-engine-trace.json', import.meta.url);
 const results: Record<string, object> = {};
 
-// The golden trace was recorded from the unchanged v1.0.0 renderer before in-place compaction.
+// Keep the historical motion trace by supplying its already-shortened message samples.
+// Full-length rendering is checked separately below; no golden regeneration hides this change.
 // These are Canvas command traces, not a claim about native GPU output or measured device FPS.
 for (const style of ['none', 'stroke', 'shadow']) {
   resetSyncs();
@@ -46,7 +47,11 @@ for (const style of ['none', 'stroke', 'shadow']) {
   let maxQueue = 0;
   for (let frame = 0; frame < 1800; frame++) {
     if (frame < 150 && frame % 3 === 0) {
-      for (let n = 0; n < 5; n++) engine.push(`${frame}:${n} 弹幕测试 🎮 ${'长'.repeat(n * 16)}`, n ? 0xff8800 : 0);
+      for (let n = 0; n < 5; n++) {
+        const sample = `${frame}:${n} 弹幕测试 🎮 ${'长'.repeat(n * 16)}`;
+        const historicalText = sample.length > 40 ? sample.substring(0, 40) + '…' : sample;
+        engine.push(historicalText, n ? 0xff8800 : 0);
+      }
     }
     if (frame === 165) {
       Settings.inst.danmakuMax = 12;
@@ -84,5 +89,22 @@ if (updating) {
 } else {
   assert.deepEqual(results, JSON.parse(readFileSync(fixture, 'utf-8')),
     'positions, ordering, font/colour/stroke/shadow, queueing, resize, hide and idle match the baseline');
-  console.log('Danmaku engine: baseline draw traces preserved; no per-frame container replacements');
+  console.log('Danmaku engine: historical motion traces preserved; no per-frame container replacements');
 }
+
+resetSyncs();
+Object.assign(Settings.inst, { danmakuSize: 18, danmakuArea: 0.6, danmakuSpeed: 1,
+  danmakuMax: 70, danmakuOpacity: 1, danmakuKeepColor: true, danmakuStroke: 'none' });
+const measured: string[] = [], drawn: string[] = [];
+const longContext = {
+  font: '', measureText(text: string) { measured.push(text); return { width: text.length * 10 }; },
+  clearRect() {}, fillText(text: string) { drawn.push(text); }, strokeText() {}
+};
+const completeText = '长'.repeat(39) + '🎮' + '后面的内容必须完整显示🙂'.repeat(12);
+const fullEngine = new DanmakuEngine(longContext as never);
+fullEngine.resize(960, 540); fullEngine.push(completeText, 0xffffff); emitFrame(1e9);
+assert.equal(measured[0], completeText, 'width and collision calculations use the full original text');
+assert.equal(drawn[0], completeText, 'Canvas receives every character, including emoji across the old boundary');
+assert.equal(drawn[0].endsWith('…'), false, 'the client does not append a truncation marker');
+fullEngine.stop();
+console.log('Danmaku engine: long messages are measured and drawn without client truncation');
