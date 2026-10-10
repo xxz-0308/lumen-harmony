@@ -14,26 +14,44 @@ export struct AmbientGlow {
   @Param src: string = '';
   @Param strength: number = 1;
   @Param glowHeight: number = 520;
+  @Param active: boolean = true;
+  @Local env: AppEnv = AppEnv.inst;
+  @Local visible: boolean = true;
+  private mounted: boolean = false;
+  private generation: number = 0;
   @Local front: image.PixelMap | null = null;
   @Local back: image.PixelMap | null = null;
   @Local frontOn: boolean = true;
   private want: string = '';
 
   aboutToAppear(): void {
+    this.mounted = true;
     this.onSrc();
   }
 
   aboutToDisappear(): void {
+    this.mounted = false;
     this.want = '';
+    this.generation++;
   }
 
-  @Monitor('src')
+  get canLoad(): boolean {
+    return this.mounted && this.active && this.visible && this.strength > 0 && this.env.foreground;
+  }
+
+  @Monitor('src', 'active', 'strength', 'visible', 'env.foreground')
   onSrc(): void {
+    if (!this.canLoad) {
+      this.want = '';
+      this.generation++;
+      return;
+    }
     const want = this.src;
     if (want === this.want) {
       return;
     }
     this.want = want;
+    const generation = ++this.generation;
     if (want.length === 0) {
       this.front = null;
       this.back = null;
@@ -45,7 +63,7 @@ export struct AmbientGlow {
       return;
     }
     GlowLoader.load(want).then((pm: image.PixelMap | null) => {
-      if (pm !== null && want === this.want) {
+      if (pm !== null && this.canLoad && generation === this.generation && want === this.want) {
         this.show(pm);
       }
     });
@@ -79,7 +97,7 @@ export struct AmbientGlow {
         .interpolation(ImageInterpolation.High)
         .scale({ x: 1.25, y: 1.25 })
         .opacity(visible ? 1 : 0)
-        .animation({ duration: 700, curve: Curve.EaseInOut })
+        .animation({ duration: this.env.reduceMotion || !this.canLoad ? 0 : 700, curve: Curve.EaseInOut })
         .draggable(false)
     }
   }
@@ -101,6 +119,7 @@ export struct AmbientGlow {
     .height(this.glowHeight)
     .opacity(0.62 * this.strength)
     .clip(true)
+    .onVisibleAreaChange([0], (visible: boolean) => { this.visible = visible; })
     .hitTestBehavior(HitTestMode.None)
   }
 }

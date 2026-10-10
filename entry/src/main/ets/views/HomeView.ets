@@ -37,11 +37,18 @@ export struct HomeView {
   @Local contentH: number = AppEnv.inst.winHeight;
   @Local favoriteCategories: LiveSubCategory[] = CategoryStore.favorites();
   @Local followSnapshot: FollowItem[] = FollowStore.inst.items;
+  @Local heroVisible: boolean = true;
+  private followRevision: number = -1;
   private syncFavorites: () => void = () => {
-    this.favoriteCategories = CategoryStore.favorites();
+    if (this.mounted && this.active) this.favoriteCategories = CategoryStore.favorites();
   };
   private syncFollows: () => void = () => {
-    this.followSnapshot = FollowStore.inst.items.slice();
+    if (!this.mounted || !this.active) return;
+    const revision = FollowStore.inst.contentRevision;
+    if (revision !== this.followRevision) {
+      this.followSnapshot = FollowStore.inst.items.slice();
+      this.followRevision = revision;
+    }
   };
 
   aboutToAppear(): void {
@@ -68,6 +75,14 @@ export struct HomeView {
   @Monitor('active')
   onActive(): void {
     if (!this.active) this.clearSwitch();
+    else {
+      this.syncFavorites();
+      this.syncFollows();
+    }
+  }
+
+  get heroActive(): boolean {
+    return this.active && this.heroVisible && AppEnv.inst.foreground;
   }
 
   private clearSwitch(): void {
@@ -280,10 +295,11 @@ export struct HomeView {
       .onClick(() => Nav.openSearch())
       HomeHero({
         items: this.heroItems, fromFollows: this.liveFollows.length > 0,
-        active: this.active && AppEnv.inst.foreground, compact: this.compact,
+        active: this.heroActive, compact: this.compact,
         heroHeight: this.heroHeight, error: this.heroError, loading: this.heroLoading,
         onRetry: () => this.retryHero(), onCover: (cover: string) => { this.ambientCover = cover; }
       })
+        .onVisibleAreaChange([0], (visible: boolean) => { this.heroVisible = visible; })
       this.liveStrip()
       this.commonCategoryStrip()
       Row() {
@@ -336,7 +352,7 @@ export struct HomeView {
   build() {
     Stack({ alignContent: Alignment.Top }) {
       AmbientGlow({
-        src: this.ambientCover, strength: Math.max(0, 1 - this.scrollY / 420),
+        src: this.ambientCover, active: this.active, strength: Math.max(0, 1 - this.scrollY / 420),
         glowHeight: this.heroHeight + AppEnv.inst.statusBarHeight + 200
       })
       Refresh({ refreshing: this.feed.refreshing, builder: this.refreshIndicator() }) {

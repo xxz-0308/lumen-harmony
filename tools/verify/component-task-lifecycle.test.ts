@@ -190,7 +190,33 @@ try {
   assert.equal(loads.length,n,'an unmounted owner starts no new manual request');
   two.aboutToAppear();assert.equal(loads.at(-1),'manual:D');
   tasks.get('manual:D')!.resolve({});await flush();
-  console.log('Component tasks: owned timers, stale callbacks, return snapshots and shared image ownership passed');
+  const followState={items:[] as any[],contentRevision:0,refreshing:false,refreshFailures:0,storageError:'',saveError:'',lastRefreshAt:0,
+    subscribe:()=>{},unsubscribe:()=>{},refreshAll:()=>{}};
+  const Follow=await logicStruct('../../../entry/src/main/ets/views/FollowView.ets','FollowView','  get contentW(): number',{
+    FollowStore:{inst:followState}
+  });
+  const followView=new Follow();followView.aboutToAppear();const followSnapshot=followView.snapshot;
+  followState.refreshing=true;followState.saveError='fixture error';followView.syncFollows();
+  assert.equal(followView.snapshot,followSnapshot);assert.equal(followView.refreshing,true);assert.equal(followView.saveError,'fixture error');
+  followView.active=false;followState.items=[{}];followState.contentRevision++;followView.syncFollows();
+  assert.equal(followView.snapshot,followSnapshot);followView.active=true;followView.onActive();assert.equal(followView.snapshot.length,1);
+  followView.aboutToDisappear();const detachedSnapshot=followView.snapshot;followState.contentRevision++;followView.syncFollows();
+  assert.equal(followView.snapshot,detachedSnapshot);
+
+  const glowTasks=new Map<string,ReturnType<typeof deferred<any>>>(),glowLoads:string[]=[];
+  const Glow=await logicStruct('../../../entry/src/main/ets/components/Decor.ets','AmbientGlow','  @Builder\n  layer(',{
+    AppEnv:{inst:{foreground:true,reduceMotion:false}},GlowLoader:{cached:()=>null,load:(url:string)=>{
+      glowLoads.push(url);if(!glowTasks.has(url))glowTasks.set(url,deferred<any>());return glowTasks.get(url)!.promise;
+    }}
+  });
+  const glow=new Glow();glow.active=false;glow.src='A';glow.aboutToAppear();assert.equal(glowLoads.length,0);
+  glow.active=true;glow.onSrc();glow.active=false;glow.onSrc();glow.src='B';glow.onSrc();
+  const sharedGlow={release:()=>{throw new Error('shared output cannot be released by a view');}};
+  glowTasks.get('A')!.resolve(sharedGlow);await flush();assert.equal(glow.front,null);
+  glow.active=true;glow.onSrc();glowTasks.get('B')!.resolve(sharedGlow);await flush();assert.equal(glow.front,sharedGlow);
+  glow.strength=0;glow.src='C';glow.onSrc();assert.deepEqual(glowLoads,['A','B']);
+  glow.strength=1;glow.onSrc();glow.aboutToDisappear();glowTasks.get('C')!.resolve({});await flush();assert.equal(glow.front,sharedGlow);
+  console.log('Component tasks: callback ownership, accepted volume intent, retained snapshots and offscreen shared glow passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

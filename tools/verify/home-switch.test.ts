@@ -74,11 +74,12 @@ class Scroller {
 }
 const settings = { homeSite: 'huya', scheduleSave() {} };
 const env = { winHeight: 700, foreground: true, reduceMotion: false };
+const followStore = { items: [] as any[], contentRevision: 0, subscribe() {}, unsubscribe() {}, refreshAll() {} };
 const Home = await logicStruct('../../../entry/src/main/ets/views/HomeView.ets', 'HomeView', '  @Builder\n  liveStrip()', {
   Settings: { inst: settings }, AppEnv: { inst: env }, Sites: { ids }, Scroller, HomeHeroState, Motion: { snappy: 0 },
   Feeds: { recommendOf: (id: SiteId) => cache.get(id) },
   CategoryStore: { favorites: () => [], subscribeFavorites() {}, unsubscribeFavorites() {} },
-  FollowStore: { inst: { items: [], subscribe() {}, unsubscribe() {}, refreshAll() {} } },
+  FollowStore: { inst: followStore },
   setTimeout: (fn: () => void) => { const id = ++nextTimer; timers.set(id, fn); return id; },
   clearTimeout: (id: number) => timers.delete(id)
 });
@@ -115,6 +116,17 @@ home.selectSite(1); const detachedFinish = finishes.at(-1)!;
 home.aboutToDisappear(); const detachedSites = home.drawnSites; detachedFinish();
 assert.equal(home.drawnSites, detachedSites); assert.equal(timers.size, 0);
 home.selectSite(0); assert.equal(home.site, 'douyu');
+
+const retainedHome = new Home(); retainedHome.active = true; retainedHome.aboutToAppear();
+const snapshot = retainedHome.followSnapshot;
+retainedHome.syncFollows(); assert.equal(retainedHome.followSnapshot, snapshot, 'status-only follow notifications keep the Home snapshot');
+retainedHome.heroVisible = false; assert.equal(retainedHome.heroActive, false);
+retainedHome.heroVisible = true; assert.equal(retainedHome.heroActive, true);
+retainedHome.active = false; retainedHome.onActive();
+followStore.items = [{ isLive: true, online: 1, toRoomItem: () => a }]; followStore.contentRevision++;
+retainedHome.syncFollows(); assert.equal(retainedHome.followSnapshot, snapshot, 'hidden Home defers snapshot publication');
+retainedHome.active = true; retainedHome.onActive(); assert.equal(retainedHome.followSnapshot.length, 1);
+assert.equal(retainedHome.heroItems[0], a); retainedHome.aboutToDisappear();
 
 const covers: string[] = [];
 const HeroView = await logicStruct('../../../entry/src/main/ets/views/HomeHero.ets', 'HomeHero', '  @Builder\n  placeholder()', {

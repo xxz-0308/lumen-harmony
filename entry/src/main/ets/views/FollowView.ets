@@ -13,6 +13,7 @@ const FILTERS: string[] = ['all', 'huya', 'douyu', 'bilibili'];
 
 @ComponentV2
 export struct FollowView {
+  @Param active: boolean = true;
   @Local filter: string = 'all';
   @Local areaW: number = 1100;
   @Local snapshot: FollowItem[] = FollowStore.inst.items;
@@ -20,21 +21,37 @@ export struct FollowView {
   @Local refreshFailures: number = 0;
   @Local storageError: string = '';
   @Local saveError: string = '';
+  @Local updatedAt: number = 0;
+  private mounted: boolean = false;
+  private contentRevision: number = -1;
   private syncFollows: () => void = () => {
-    this.snapshot = FollowStore.inst.items.slice();
-    this.refreshing = FollowStore.inst.refreshing;
-    this.refreshFailures = FollowStore.inst.refreshFailures;
-    this.storageError = FollowStore.inst.storageError;
-    this.saveError = FollowStore.inst.saveError;
+    if (!this.mounted || !this.active) return;
+    const store = FollowStore.inst;
+    if (this.contentRevision !== store.contentRevision) {
+      this.snapshot = store.items.slice();
+      this.contentRevision = store.contentRevision;
+    }
+    this.refreshing = store.refreshing;
+    this.refreshFailures = store.refreshFailures;
+    this.storageError = store.storageError;
+    this.saveError = store.saveError;
+    this.updatedAt = store.lastRefreshAt;
   };
 
+  @Monitor('active')
+  onActive(): void {
+    if (this.active) this.syncFollows();
+  }
+
   aboutToAppear(): void {
+    this.mounted = true;
     FollowStore.inst.subscribe(this.syncFollows);
     this.syncFollows();
     FollowStore.inst.refreshAll();
   }
 
   aboutToDisappear(): void {
+    this.mounted = false;
     FollowStore.inst.unsubscribe(this.syncFollows);
   }
 
@@ -83,8 +100,8 @@ export struct FollowView {
     if (n === 0) {
       return '';
     }
-    const at = this.refreshing ? '正在刷新' : (FollowStore.inst.lastRefreshAt > 0 ?
-      `更新于 ${relativeTime(FollowStore.inst.lastRefreshAt)}` : '');
+    const at = this.refreshing ? '正在刷新' : (this.updatedAt > 0 ?
+      `更新于 ${relativeTime(this.updatedAt)}` : '');
     const failure = this.refreshFailures > 0 ? ` · ${this.refreshFailures} 位刷新失败，可重试` : '';
     const live = this.snapshot.filter((f: FollowItem) => f.isLive).length;
     return `${n} 位主播 · ${live} 位在直播${at.length > 0 ? ' · ' + at : ''}${failure}${this.saveError ? ' · ' + this.saveError : ''}`;

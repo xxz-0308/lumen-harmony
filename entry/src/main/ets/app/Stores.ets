@@ -106,6 +106,8 @@ export class FollowStore {
   private listeners: Set<() => void> = new Set<() => void>();
 
   @Trace items: FollowItem[] = [];
+  // List consumers copy only changed content, not refresh/persistence status notifications.
+  contentRevision: number = 0;
   @Trace refreshing: boolean = false;
   @Trace lastRefreshAt: number = 0;
   @Trace refreshFailures: number = 0;
@@ -120,7 +122,8 @@ export class FollowStore {
     this.listeners.delete(listener);
   }
 
-  private notify(): void {
+  private notify(contentChanged: boolean = false): void {
+    if (contentChanged) this.contentRevision++;
     this.listeners.forEach((listener: () => void) => listener());
   }
 
@@ -156,7 +159,7 @@ export class FollowStore {
       }
       this.items = out;
       this.storageError = '';
-      this.notify();
+      this.notify(true);
     } catch (e) {
       this.storageError = '关注数据读取失败，原记录未被覆盖';
       Log.e('follow', `load ${JSON.stringify(e)}`);
@@ -215,7 +218,7 @@ export class FollowStore {
     f.addTime = Date.now();
     FollowStore.applyDetail(f, detail);
     this.items = [f].concat(this.items);
-    this.notify();
+    this.notify(true);
     this.persist();
   }
 
@@ -231,7 +234,7 @@ export class FollowStore {
     f.addTime = Date.now();
     f.state = live ? LiveState.Live : LiveState.Offline;
     this.items = [f].concat(this.items);
-    this.notify();
+    this.notify(true);
     this.persist();
     this.refreshOne(f);
   }
@@ -240,8 +243,10 @@ export class FollowStore {
     if (this.storageError.length > 0) {
       return;
     }
-    this.items = this.items.filter((f: FollowItem) => !(f.siteId === siteId && f.roomId === roomId));
-    this.notify();
+    const remaining = this.items.filter((f: FollowItem) => !(f.siteId === siteId && f.roomId === roomId));
+    if (remaining.length === this.items.length) return;
+    this.items = remaining;
+    this.notify(true);
     this.persist();
   }
 
@@ -251,18 +256,22 @@ export class FollowStore {
     if (f === undefined) {
       return;
     }
-    const changed = f.userName !== detail.userName || f.avatar !== detail.userAvatar;
-    FollowStore.applyDetail(f, detail);
-    this.notify();
-    if (changed) {
+    const persistChanged = f.userName !== detail.userName || f.avatar !== detail.userAvatar;
+    const changed = FollowStore.applyDetail(f, detail);
+    if (persistChanged) {
       f.userName = detail.userName;
       f.avatar = detail.userAvatar;
-      this.persist();
     }
+    this.notify(changed || persistChanged);
+    if (persistChanged) this.persist();
   }
 
-  private static applyDetail(f: FollowItem, d: LiveRoomDetail): void {
-    f.state = d.status ? LiveState.Live : (d.isRecord ? LiveState.Replay : LiveState.Offline);
+  private static applyDetail(f: FollowItem, d: LiveRoomDetail): boolean {
+    const state = d.status ? LiveState.Live : (d.isRecord ? LiveState.Replay : LiveState.Offline);
+    const changed = f.state !== state || f.title !== d.title || f.cover !== d.cover ||
+      f.online !== d.online || f.area !== d.area || f.startTime !== d.startTime ||
+      (d.userAvatar.length > 0 && f.avatar !== d.userAvatar);
+    f.state = state;
     f.title = d.title;
     f.cover = d.cover;
     f.online = d.online;
@@ -271,6 +280,7 @@ export class FollowStore {
     if (d.userAvatar.length > 0) {
       f.avatar = d.userAvatar;
     }
+    return changed;
   }
 
   get liveItems(): FollowItem[] {
@@ -294,10 +304,14 @@ export class FollowStore {
 
   private async refreshOne(f: FollowItem): Promise<void> {
     f.refreshing = true;
+    let changed = false;
     try {
       const d = await Sites.of(f.siteId).getRoomDetail(f.roomId);
-      FollowStore.applyDetail(f, d);
-      if (f.userName.length === 0 || f.userName !== d.userName) {
+      // An unfollowed item may still have a shared request in flight.
+      if (this.find(f.siteId, f.roomId) !== f) return;
+      changed = FollowStore.applyDetail(f, d);
+      if (f.userName !== d.userName) {
+        changed = true;
         f.userName = d.userName;
       }
     } catch (e) {
@@ -305,7 +319,7 @@ export class FollowStore {
       Log.w('follow', `refresh ${f.key} failed: ${e}`);
     } finally {
       f.refreshing = false;
-      this.notify();
+      this.notify(changed);
     }
   }
 

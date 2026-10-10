@@ -114,7 +114,7 @@ struct Index {
     }
     if (key === 'follow' && this.visited.indexOf('follow') >= 0) {
       SectionHost({ active: this.section === 'follow' }) {
-        FollowView()
+        FollowView({ active: this.section === 'follow' && this.rootShown && this.env.foreground })
       }
     }
     if (key === 'mine' && this.visited.indexOf('mine') >= 0) {
