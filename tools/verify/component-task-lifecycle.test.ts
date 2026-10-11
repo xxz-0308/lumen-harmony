@@ -266,7 +266,22 @@ try {
   p.openSheet('sleep');assert.equal(keyboardMode,2);p.closeSheet();assert.equal(keyboardMode,1);
   p.openSheet('sleep');p.disposeRoom('navigation');assert.equal(keyboardMode,1,'disposal restores the previous keyboard policy');
   p.openSheet('sleep');assert.equal(keyboardMode,1);
-  console.log('Component tasks: lifecycle, current intent, retained state, category reversal, dismissal and scoped keyboard policy passed');
+  let chatScrolls=0;
+  const chatModel={chats:[] as {id:number}[]};
+  const Chat=await logicStruct('../../../entry/src/main/ets/room/RoomPanels.ets','ChatList','  build() {',{
+    RoomModel:class{chats=[];},ListScroller:class{scrollEdge(){chatScrolls++;}},Edge:{Bottom:0}
+  });
+  const chat=new Chat();chat.model=chatModel;chat.active=false;chat.aboutToAppear();
+  const idleJobs=clock.jobs.size;
+  chatModel.chats=[{id:1}];chat.onChats();assert.equal(clock.jobs.size,idleJobs,'hidden chat never schedules scrolling');
+  chat.active=true;chat.onActive();clock.advance(0);assert.equal(chatScrolls,1,'a following chat reconciles once on activation');
+  chatModel.chats=[{id:1},{id:2}];chat.onChats();chat.active=false;chat.onActive();clock.advance(0);
+  assert.equal(chatScrolls,1,'hiding cancels pending scroll work');
+  chat.following=false;chat.active=true;chat.onActive();chatModel.chats=[{id:1},{id:2},{id:3}];chat.onChats();clock.advance(0);
+  assert.equal(chatScrolls,1,'activation and new messages preserve manual scroll position');assert.equal(chat.unseen,1);
+  chat.following=true;chat.onChats();chat.aboutToDisappear();clock.advance(0);chat.onChats();
+  assert.equal(chatScrolls,1,'detached chat cannot scroll or schedule tasks');assert.equal(clock.jobs.size,idleJobs);
+  console.log('Component tasks: lifecycle, current intent, retained state, category reversal, dismissal, keyboard and hidden chat scrolling passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

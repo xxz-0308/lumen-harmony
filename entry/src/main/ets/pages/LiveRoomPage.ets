@@ -1233,7 +1233,8 @@ export struct LiveRoomPage {
       .padding({ top: 14, bottom: 10 })
 
       Stack() {
-        ChatList({ model: this.model, dark: this.env.isDark })
+        ChatList({ model: this.model, dark: this.env.isDark,
+          active: this.env.foreground && this.showPanel && !this.fullscreen && this.panelTab === 0 })
           .visibility(this.panelTab === 0 ? Visibility.Visible : Visibility.Hidden)
         if (this.panelTab === 1) {
           LiveFollowList({

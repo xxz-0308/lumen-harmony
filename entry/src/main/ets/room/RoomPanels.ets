@@ -66,35 +66,60 @@ export struct ScCardView {
 export struct ChatList {
   @Param model: RoomModel = new RoomModel();
   @Param dark: boolean = true;
+  @Param active: boolean = true;
   @Local following: boolean = true;
   @Local unseen: number = 0;
   private scroller: ListScroller = new ListScroller();
   private lastCount: number = 0;
   private scrollTimer: number = -1;
+  private mounted: boolean = false;
+
+  aboutToAppear(): void {
+    this.mounted = true;
+    this.lastCount = this.model.chats.length;
+    this.scrollToLatest();
+  }
 
   @Monitor('model.chats')
   onChats(): void {
+    if (!this.mounted) return;
     const n = this.model.chats.length;
     const added = Math.max(0, n - this.lastCount);
     this.lastCount = n;
     if (this.following) {
-      if (this.scrollTimer >= 0) {
-        clearTimeout(this.scrollTimer);
-      }
-      this.scrollTimer = setTimeout(() => {
-        this.scrollTimer = -1;
-        this.scroller.scrollEdge(Edge.Bottom);
-      }, 0);
+      this.scrollToLatest();
     } else {
       this.unseen += added > 0 ? added : 1;
     }
   }
 
-  aboutToDisappear(): void {
+  @Monitor('active')
+  onActive(): void {
+    this.cancelScroll();
+    this.scrollToLatest();
+  }
+
+  private scrollToLatest(): void {
+    if (!this.mounted || !this.active || !this.following) return;
+    this.cancelScroll();
+    this.scrollTimer = setTimeout(() => {
+      this.scrollTimer = -1;
+      if (this.mounted && this.active && this.following) {
+        this.scroller.scrollEdge(Edge.Bottom);
+      }
+    }, 0);
+  }
+
+  private cancelScroll(): void {
     if (this.scrollTimer >= 0) {
       clearTimeout(this.scrollTimer);
       this.scrollTimer = -1;
     }
+  }
+
+  aboutToDisappear(): void {
+    this.mounted = false;
+    this.cancelScroll();
   }
 
   build() {
