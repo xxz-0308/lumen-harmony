@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { transform } from 'esbuild';
 import { PlayState } from '../../entry/src/main/ets/player/PlayerApi';
 import { isNarrowTheater, showTheaterPanel } from '../../entry/src/main/ets/room/TheaterLayout';
+import { BulletDelay, BULLET_LEAD_MS } from '../../entry/src/main/ets/danmaku/BulletDelay';
 
 // Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
@@ -292,7 +293,34 @@ try {
   p.disposeRoom('navigation');env.foreground=true;p.onChatPresentation();assert.equal(p.model.chatActive,false);
   chat.following=true;chat.onChats();chat.aboutToDisappear();clock.advance(0);chat.onChats();
   assert.equal(chatScrolls,1,'detached chat cannot scroll or schedule tasks');assert.equal(clock.jobs.size,idleJobs);
-  console.log('Component tasks: lifecycle, current intent, retained state, category reversal, dismissal, keyboard and hidden chat scrolling passed');
+  const Video=await logicStruct('../../../entry/src/main/ets/room/VideoLayer.ets','VideoLayer','  /** Video frame size',{
+    RoomModel:Model,XComponentController:class{},BulletDelay,BULLET_LEAD_MS
+  });
+  const video=new Video();video.aboutToAppear();video.model.player.latencyMs=6000;
+  const painted:string[]=[];video.bindBullets({push:(text:string)=>painted.push(text)});
+  const oldReceiver=video.model.onBullet;oldReceiver('pending',0xffffff);assert.equal(clock.jobs.size,idleJobs+1);
+  video.danmakuOn=false;video.onBulletActivity();oldReceiver('disabled',0xffffff);
+  assert.equal(clock.jobs.size,idleJobs,'danmaku-off cancels delay and does not accept hidden intake');
+  video.danmakuOn=true;video.model.player.latencyMs=0;video.onBulletActivity();oldReceiver('new',0xffffff);
+  assert.deepEqual(painted,['new'],'re-enable does not replay the disabled backlog');
+  video.presentationActive=false;video.onBulletActivity();oldReceiver('background',0xffffff);
+  assert.deepEqual(painted,['new']);video.presentationActive=true;
+  video.bindBullets({push:(text:string)=>painted.push(text)});oldReceiver('retired',0xffffff);
+  video.model.onBullet('current',0xffffff);assert.deepEqual(painted,['new','current']);
+  const currentReceiver=video.model.onBullet;video.aboutToDisappear();currentReceiver('detached',0xffffff);
+  assert.equal(video.model.onBullet,null);assert.equal(clock.jobs.size,idleJobs);
+  video.aboutToAppear();video.bindBullets({push:()=>{}});const replacement=()=>{};video.model.onBullet=replacement;
+  video.aboutToDisappear();assert.equal(video.model.onBullet,replacement,'cleanup only unbinds the callback it owns');
+  let canvasStops=0,canvasClears=0;
+  const CanvasHost=await logicStruct('../../../entry/src/main/ets/danmaku/DanmakuCanvas.ets','DanmakuCanvas','  build() {',{
+    RenderingContextSettings:class{},CanvasRenderingContext2D:class{},DanmakuEngine:class{
+      visible=true;clear(){canvasClears++;}stop(){canvasStops++;}
+    }
+  });
+  const host=new CanvasHost();host.visible=false;host.onVisible();
+  assert.equal(canvasClears,1);assert.equal(canvasStops,1,'hiding parks display synchronization immediately');
+  assert.equal(host.engine.visible,false);
+  console.log('Component tasks: lifecycle, intent, retained state, hidden chat, presentation-off intake, callback ownership and immediate Canvas parking passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

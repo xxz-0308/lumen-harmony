@@ -18,6 +18,7 @@ export struct DanmakuCanvas {
     this.engine.visible = this.visible;
     if (!this.visible) {
       this.engine.clear();
+      this.engine.stop();
     }
   }
 
@@ -40,7 +41,7 @@ export struct DanmakuCanvas {
       .onReady(() => {
         this.engine.visible = this.visible;
         this.engine.resize(this.ctx.width, this.ctx.height);
-        this.engine.start();
+        if (this.visible) this.engine.start();
         this.bind(this.engine);
       })
       .onAreaChange((o: Area, n: Area) => {

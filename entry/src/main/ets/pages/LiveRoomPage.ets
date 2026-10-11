@@ -43,6 +43,7 @@ export struct LiveRoomPage {
   @Local followed: boolean = false;
   @Local danmakuStyleVersion: number = 0;
   @Local fullscreen: boolean = false;
+  @Local presentationActive: boolean = true;
   @Local panelOpen: boolean = Settings.inst.theaterPanelOpen;
   @Local drawerOpen: boolean = false;
   /**
@@ -203,6 +204,7 @@ export struct LiveRoomPage {
     }
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
+    this.presentationActive = false;
     this.restoreSheetKeyboard();
     this.env.unsubscribeForeground(this.foregroundListener);
     this.clearPipCloseCheck();
@@ -1059,6 +1061,7 @@ export struct LiveRoomPage {
         model: this.model,
         fill: this.fillVideo,
         danmakuOn: this.danmakuEnabled,
+        presentationActive: this.env.foreground && this.presentationActive,
         styleVersion: this.danmakuStyleVersion,
         cornerRadius: this.fullscreen ? 0 : Radius.xl,
         onSurface: (xc: XComponentController) => {

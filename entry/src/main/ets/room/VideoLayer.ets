@@ -15,6 +15,7 @@ export struct VideoLayer {
   @Param model: RoomModel = new RoomModel();
   @Param fill: boolean = false;
   @Param danmakuOn: boolean = true;
+  @Param presentationActive: boolean = true;
   @Param styleVersion: number = 0;
   @Param cornerRadius: number = 0;
   /** Receives the surface controller whenever the XComponent loads (used for picture-in-picture). */
@@ -28,6 +29,38 @@ export struct VideoLayer {
   private static nextId: number = 0;
   private noticeTimer: number = -1;
   private bullets: BulletDelay | null = null;
+  private bulletReceiver: ((text: string, color: number) => void) | null = null;
+  private mounted: boolean = false;
+
+  aboutToAppear(): void {
+    this.mounted = true;
+  }
+
+  @Monitor('danmakuOn', 'presentationActive')
+  onBulletActivity(): void {
+    if (!this.danmakuOn || !this.presentationActive) this.bullets?.clear();
+  }
+
+  private bindBullets(engine: DanmakuEngine | null): void {
+    this.bullets?.clear();
+    this.bullets = null;
+    if (this.model.onBullet === this.bulletReceiver) this.model.onBullet = null;
+    this.bulletReceiver = null;
+    if (engine === null || !this.mounted) return;
+    // Flying danmaku follows the picture; side chat and protocol liveness are independent.
+    const delay = new BulletDelay((text: string, color: number) => {
+      if (this.mounted && this.bullets === delay && this.danmakuOn && this.presentationActive) {
+        engine.push(text, color);
+      }
+    }, () => this.model.player.latencyMs - BULLET_LEAD_MS);
+    this.bullets = delay;
+    this.bulletReceiver = (text: string, color: number) => {
+      if (this.mounted && this.bullets === delay && this.danmakuOn && this.presentationActive) {
+        delay.push(text, color);
+      }
+    };
+    this.model.onBullet = this.bulletReceiver;
+  }
 
   /** Room switched from the follow drawer: bring the cover back for a cross-fade. */
   @Monitor('model.switchSeq')
@@ -49,7 +82,8 @@ export struct VideoLayer {
   }
 
   aboutToDisappear(): void {
-    this.bullets?.clear();
+    this.mounted = false;
+    this.bindBullets(null);
     if (this.noticeTimer >= 0) {
       clearTimeout(this.noticeTimer);
     }
@@ -130,21 +164,9 @@ export struct VideoLayer {
       .animation({ duration: 380, curve: Curve.EaseOut })
 
       DanmakuCanvas({
-        visible: this.danmakuOn,
+        visible: this.danmakuOn && this.presentationActive,
         styleVersion: this.styleVersion,
-        bind: (engine: DanmakuEngine | null) => {
-          this.bullets?.clear();
-          this.bullets = null;
-          if (engine === null) {
-            this.model.onBullet = null;
-            return;
-          }
-          // Flying danmaku follows the picture (about a second early); the side chat stays live.
-          const delay = new BulletDelay((text: string, color: number) => engine.push(text, color),
-            () => this.model.player.latencyMs - BULLET_LEAD_MS);
-          this.bullets = delay;
-          this.model.onBullet = (text: string, color: number) => delay.push(text, color);
-        }
+        bind: (engine: DanmakuEngine | null) => this.bindBullets(engine)
       })
         .width('100%')
         .height('100%')
