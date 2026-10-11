@@ -108,3 +108,20 @@ assert.equal(drawn[0], completeText, 'Canvas receives every character, including
 assert.equal(drawn[0].endsWith('…'), false, 'the client does not append a truncation marker');
 fullEngine.stop();
 console.log('Danmaku engine: long messages are measured and drawn without client truncation');
+
+resetSyncs();
+Object.assign(Settings.inst, { danmakuMax:70, danmakuSize:18, danmakuArea:0.6, danmakuSpeed:1 });
+const costEngine=new DanmakuEngine({font:'',measureText:()=>({width:100}),clearRect(){},fillText(){},strokeText(){}} as never);
+costEngine.resize(960,80);
+const cost=costEngine as unknown as {bullets:any[];queue:any[];place:(b:any)=>boolean};
+let scans=0,placements=0;
+cost.bullets.indexOf=function(b:any){scans++;return Array.prototype.indexOf.call(this,b);};
+const place=cost.place;cost.place=function(b:any){placements++;return place.call(this,b);};
+for(let n=0;n<70;n++)costEngine.push(`fixture ${n}`,0xffffff);
+assert.equal(cost.queue.length,30,'the saturation benchmark exercises waiting placement');
+for(let frame=0;frame<240;frame++)emitFrame(Math.round((frame+1)*1e9/120));
+assert.ok(placements>1000);assert.equal(scans,0,'saturated lane admission performs no live-array membership scans');
+const expired=cost.bullets[0];expired.x=-10000;emitFrame(Math.round(241*1e9/120));
+assert.equal(expired.alive,false,'expiry invalidates the former tail');
+const retained=cost.bullets.slice();costEngine.clear();assert.ok(retained.every(b=>!b.alive));costEngine.stop();
+console.log(`Danmaku engine: ${placements} saturated placement attempts, zero live-array scans, explicit tail lifetime passed`);

@@ -8,6 +8,7 @@ class Bullet {
   x: number = 0;
   lane: number = 0;
   speed: number = 0;
+  alive: boolean = false;
 }
 
 /** Converts 0xRRGGBB into a CSS color, softening pure black which is unreadable on video. */
@@ -93,6 +94,7 @@ export class DanmakuEngine {
   }
 
   clear(): void {
+    for (const b of this.bullets) b.alive = false;
     this.bullets.length = 0;
     this.queue.length = 0;
     this.laneTail.length = 0;
@@ -129,7 +131,7 @@ export class DanmakuEngine {
     const lanes = this.laneCount;
     for (let i = 0; i < lanes; i++) {
       const tail = this.laneTail[i];
-      if (tail === undefined || this.bullets.indexOf(tail) < 0) {
+      if (tail === undefined || !tail.alive) {
         this.assign(b, i);
         return true;
       }
@@ -151,16 +153,19 @@ export class DanmakuEngine {
     b.lane = lane;
     b.x = this.w;
     this.laneTail[lane] = b;
+    b.alive = true;
     this.bullets.push(b);
   }
 
   /** Drops bullets that no longer fit the configured area or exceed the current cap. */
   trim(): void {
     const lanes = this.laneCount;
+    for (const b of this.bullets) b.alive = false;
     if (Settings.inst.danmakuMax < this.bullets.length) {
       this.bullets = this.bullets.slice(0, Settings.inst.danmakuMax);
     }
     this.bullets = this.bullets.filter((b: Bullet) => b.lane < lanes);
+    for (const b of this.bullets) b.alive = true;
     this.queue = [];
     this.laneTail = [];
   }
@@ -223,6 +228,7 @@ export class DanmakuEngine {
       const b = this.bullets[i];
       b.x -= b.speed * dt;
       if (b.x + b.width < 0) {
+        b.alive = false;
         continue;
       }
       this.bullets[alive++] = b;
