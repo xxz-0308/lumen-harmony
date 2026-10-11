@@ -125,3 +125,25 @@ const expired=cost.bullets[0];expired.x=-10000;emitFrame(Math.round(241*1e9/120)
 assert.equal(expired.alive,false,'expiry invalidates the former tail');
 const retained=cost.bullets.slice();costEngine.clear();assert.ok(retained.every(b=>!b.alive));costEngine.stop();
 console.log(`Danmaku engine: ${placements} saturated placement attempts, zero live-array scans, explicit tail lifetime passed`);
+
+resetSyncs();Object.assign(Settings.inst,{danmakuSize:18,danmakuStroke:'stroke',danmakuKeepColor:true});
+const setters:Record<string,number>={};
+const paint:any={measureText:()=>({width:100}),clearRect(){},fillText(){},strokeText(){}};
+for(const [key,initial] of Object.entries({font:'',textBaseline:'',lineJoin:'',lineWidth:1,strokeStyle:'',fillStyle:'',shadowColor:'',shadowOffsetX:0,shadowOffsetY:0})){
+  let value=initial;
+  Object.defineProperty(paint,key,{get:()=>value,set:(next:any)=>{setters[key]=(setters[key]??0)+1;value=next;}});
+}
+const paintEngine=new DanmakuEngine(paint);paintEngine.resize(960,540);paintEngine.push('stable paint',0xffffff);
+for(let frame=0;frame<240;frame++)emitFrame(Math.round((frame+1)*1e9/120));
+for(const key of ['font','textBaseline','lineJoin','lineWidth','strokeStyle','fillStyle']){
+  assert.equal(setters[key],1,`${key} is submitted once for 240 unchanged drawing frames`);
+}
+assert.equal(paint.globalAlpha,1);assert.equal(paint.shadowBlur,0,'per-frame opacity/shadow cleanup is preserved');
+paintEngine.resize(720,480);paintEngine.push('after resize',0xffffff);emitFrame(3e9);
+assert.equal(setters.font,2);assert.equal(setters.fillStyle,2,'resize re-establishes the context paint state');
+Settings.inst.danmakuStroke='shadow';emitFrame(3.01e9);emitFrame(3.02e9);
+assert.equal(setters.shadowColor,1);assert.equal(setters.shadowOffsetX,1);assert.equal(setters.shadowOffsetY,1);
+assert.equal(paint.shadowBlur,0);Settings.inst.danmakuSize=24;paintEngine.push('new font size',0xffffff);emitFrame(3.03e9);
+assert.equal(setters.font,3,'measurement applies the new font immediately');
+paintEngine.clear();paintEngine.push('after clear',0xffffff);emitFrame(3.04e9);assert.equal(setters.font,4);
+paintEngine.stop();console.log('Danmaku engine: stable paint setters submitted once over 240 frames; resize/style/font/clear invalidation and cleanup passed');

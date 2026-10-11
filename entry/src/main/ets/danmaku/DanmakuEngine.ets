@@ -32,6 +32,11 @@ export class DanmakuEngine {
   private h: number = 0;
   private running: boolean = false;
   private cleared: boolean = true;
+  private appliedFontSize: number = 0;
+  private paintReady: boolean = false;
+  private appliedStroke: string = '';
+  private appliedStrokeSize: number = 0;
+  private appliedFill: string = '';
   visible: boolean = true;
 
   constructor(ctx: CanvasRenderingContext2D) {
@@ -53,6 +58,13 @@ export class DanmakuEngine {
 
   private get fontSize(): number {
     return Settings.inst.danmakuSize;
+  }
+
+  /** This context is owned by the engine; clear/resize invalidates its cached paint state. */
+  private applyFont(size: number): void {
+    if (size === this.appliedFontSize) return;
+    this.ctx.font = `bold ${size}vp sans-serif`;
+    this.appliedFontSize = size;
   }
 
   private get laneHeight(): number {
@@ -98,6 +110,9 @@ export class DanmakuEngine {
     this.bullets.length = 0;
     this.queue.length = 0;
     this.laneTail.length = 0;
+    this.appliedFontSize = 0;
+    this.paintReady = false;
+    this.appliedFill = '';
     this.ctx.clearRect(0, 0, this.w, this.h);
     this.cleared = true;
   }
@@ -112,7 +127,7 @@ export class DanmakuEngine {
     const b = new Bullet();
     b.text = text;
     b.color = Settings.inst.danmakuKeepColor ? cssColor(color) : '#FFFFFF';
-    this.ctx.font = `bold ${this.fontSize}vp sans-serif`;
+    this.applyFont(this.fontSize);
     b.width = this.ctx.measureText(b.text).width;
     b.x = this.w;
     b.speed = (this.w + b.width) / this.duration;
@@ -206,22 +221,24 @@ export class DanmakuEngine {
     const size = this.fontSize;
     const lh = this.laneHeight;
     const stroke = Settings.inst.danmakuStroke;
-    ctx.font = `bold ${size}vp sans-serif`;
-    ctx.textBaseline = 'middle';
-    ctx.globalAlpha = Settings.inst.danmakuOpacity;
-    ctx.lineJoin = 'round';
-    if (stroke === 'stroke') {
-      ctx.lineWidth = Math.max(2, size / 8);
-      ctx.strokeStyle = 'rgba(0,0,0,0.72)';
-      ctx.shadowBlur = 0;
-    } else if (stroke === 'shadow') {
-      ctx.shadowColor = 'rgba(0,0,0,0.85)';
-      ctx.shadowBlur = 4;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 1;
-    } else {
-      ctx.shadowBlur = 0;
+    this.applyFont(size);
+    if (!this.paintReady || stroke !== this.appliedStroke || size !== this.appliedStrokeSize) {
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      if (stroke === 'stroke') {
+        ctx.lineWidth = Math.max(2, size / 8);
+        ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+      } else if (stroke === 'shadow') {
+        ctx.shadowColor = 'rgba(0,0,0,0.85)';
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 1;
+      }
+      this.paintReady = true;
+      this.appliedStroke = stroke;
+      this.appliedStrokeSize = size;
     }
+    ctx.globalAlpha = Settings.inst.danmakuOpacity;
+    ctx.shadowBlur = stroke === 'shadow' ? 4 : 0;
     let alive = 0;
     const count = this.bullets.length;
     for (let i = 0; i < count; i++) {
@@ -236,7 +253,10 @@ export class DanmakuEngine {
       if (stroke === 'stroke') {
         ctx.strokeText(b.text, b.x, y);
       }
-      ctx.fillStyle = b.color;
+      if (b.color !== this.appliedFill) {
+        ctx.fillStyle = b.color;
+        this.appliedFill = b.color;
+      }
       ctx.fillText(b.text, b.x, y);
     }
     this.bullets.length = alive;
