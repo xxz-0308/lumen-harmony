@@ -12,6 +12,11 @@ export struct DanmakuCanvas {
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
   private engine: DanmakuEngine = new DanmakuEngine(this.ctx);
+  private ready: boolean = false;
+
+  aboutToAppear(): void {
+    if (this.ready) this.bind(this.engine);
+  }
 
   @Monitor('visible')
   onVisible(): void {
@@ -19,6 +24,8 @@ export struct DanmakuCanvas {
     if (!this.visible) {
       this.engine.clear();
       this.engine.stop();
+    } else if (this.ready) {
+      this.bind(this.engine);
     }
   }
 
@@ -39,6 +46,7 @@ export struct DanmakuCanvas {
       .height('100%')
       .hitTestBehavior(HitTestMode.None)
       .onReady(() => {
+        this.ready = true;
         const context = this.getUIContext();
         this.engine.setScope((task: () => void) => context.runScopedTask(task));
         this.engine.visible = this.visible;

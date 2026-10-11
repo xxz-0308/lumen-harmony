@@ -13,6 +13,10 @@ import {
   SideChatOverlay
 } from '../room/RoomPanels';
 import { LiveRouteParam, Nav } from '../app/Nav';
+import { RetainedRoomPlayback } from '../app/RetainedRoomPlayback';
+import { RoomBulletDelivery } from '../danmaku/RoomBulletDelivery';
+import { DanmakuEngine } from '../danmaku/DanmakuEngine';
+import { PipDanmakuController } from '../platform/PipDanmakuController';
 import { AppEnv } from '../app/AppEnv';
 import { LeaveBehavior, Settings } from '../app/Settings';
 import { MediaVolume } from '../platform/MediaVolume';
@@ -73,6 +77,12 @@ export struct LiveRoomPage {
   private sourceRoomKey: string = '';
   @Local exiting: boolean = false;
   private disposed: boolean = false;
+  private readonly playbackOwner: number = RetainedRoomPlayback.newOwner();
+  private roomReady: boolean = false;
+  private pipHandoff: boolean = false;
+  private pipStartRoom: string = '';
+  private pipStartTimer: number = -1;
+  private fullscreenTarget: boolean = false;
   @Local exitOpacity: number = 1;
   /**
    * Enter/exit: the page background and the room's chrome fade separately while a copy of the
@@ -92,6 +102,7 @@ export struct LiveRoomPage {
   /** The player's last frame, captured just before leaving; the card cover is the fallback. */
   @Local morphPixel: image.PixelMap | null = null;
   private videoXc: XComponentController | null = null;
+  private mainDanmaku: DanmakuEngine | null = null;
   private backIssued: boolean = false;
   private backCaptureTimer: number = -1;
   @Local sleepInput: string = '';
@@ -114,20 +125,30 @@ export struct LiveRoomPage {
   private audioOwner: number = 0;
   private foregroundListener: () => void = () => this.onForeground();
   @Local pipActive: boolean = false;
+  @Local pipShown: boolean = false;
   private pipSupported: boolean = LivePip.supported();
   /** While going to the background with auto PiP armed, give the PiP window time to appear. */
   private pipGraceTimer: number = -1;
   private pipCloseTimer: number = -1;
+  private bullets: RoomBulletDelivery = new RoomBulletDelivery(() => this.model.player.latencyMs);
+  private pipDanmaku: PipDanmakuController = new PipDanmakuController((engine) => this.bullets.bindPip(engine));
   private pip: LivePip = new LivePip({
     play: () => {
       this.pausedByBackground = false;
       this.model.resume();
     },
     pause: () => this.pausePlayback(),
+    onStarted: () => this.onPipStarted(),
+    onStopped: (restoring: boolean) => this.onPipStopped(restoring),
     onActive: (active: boolean, restoring: boolean) => {
       if (this.disposed) return;
       this.clearPipCloseCheck();
       this.pipActive = active;
+      if (!active) {
+        this.pipShown = false;
+        this.pipDanmaku.setVisible(false);
+        this.onBulletPresentation();
+      }
       if (active && this.pausedByBackground) {
         this.pausedByBackground = false;
         this.model.resume();
@@ -160,6 +181,9 @@ export struct LiveRoomPage {
       this.appliedDanmakuStyle = style;
       this.danmakuStyleVersion++;
     }
+    this.pipDanmaku.setEnabled(this.danmakuEnabled);
+    this.pipDanmaku.setStyleVersion(this.danmakuStyleVersion);
+    this.onBulletPresentation();
   }
 
   private applyVolume(volume: number): void {
@@ -168,13 +192,27 @@ export struct LiveRoomPage {
     this.appliedVolume = volume;
   }
 
-  @Monitor('env.foreground', 'fullscreen', 'panelOpen', 'drawerOpen', 'rootW', 'panelTab', 'sideChatEnabled')
+  @Monitor('env.foreground', 'presentationActive', 'fullscreen', 'panelOpen', 'drawerOpen', 'rootW', 'panelTab', 'sideChatEnabled')
   onChatPresentation(): void {
     if (this.disposed) return;
-    const active = this.env.foreground &&
+    const active = this.presentationActive && this.env.foreground &&
       (this.fullscreen ? this.sideChatEnabled : this.showPanel && this.panelTab === 0);
     this.model.setChatActive(active);
   }
+
+  @Monitor('env.foreground', 'presentationActive', 'pipShown', 'danmakuEnabled')
+  onBulletPresentation(): void {
+    if (this.disposed) return;
+    this.bullets.setPresentation(this.presentationActive && this.env.foreground,
+      this.pipShown, this.danmakuEnabled);
+  }
+
+  @Monitor('model.switchSeq')
+  onRoomSwitch(): void { this.bullets.clear(); }
+
+  @Monitor('settings.danmakuOn', 'settings.danmakuSize', 'settings.danmakuOpacity', 'settings.danmakuSpeed',
+    'settings.danmakuMax', 'settings.danmakuArea', 'settings.danmakuStroke', 'settings.danmakuKeepColor')
+  onDanmakuSettings(): void { this.syncSettings(); }
 
   aboutToAppear(): void {
     if (this.disposed) return;
@@ -188,6 +226,9 @@ export struct LiveRoomPage {
   onReady(ctx: NavDestinationContext): void {
     if (this.disposed) return;
     const p = ctx.pathInfo.param as LiveRouteParam;
+    p.owner = this.playbackOwner;
+    if (this.roomReady) return;
+    this.roomReady = true;
     Log.i('page', `live onReady ${p.siteId} room=${p.roomId}`);
     this.sourceRoomKey = `${p.siteId}_${p.roomId}`;
     this.audioOwner = BackgroundAudio.attach(AppEnv.inst.context, {
@@ -197,6 +238,7 @@ export struct LiveRoomPage {
       },
       pause: () => this.pausePlayback()
     });
+    this.model.onBullet = (text: string, color: number) => this.bullets.push(text, color);
     this.model.open(p.siteId, p.roomId, p.preview);
     if (Settings.inst.autoFullscreen) {
       this.setFullscreen(true, false);
@@ -214,26 +256,33 @@ export struct LiveRoomPage {
    * willDisappear also ends the room; otherwise it keeps playing, unseen, after Back.
    */
   private disposeRoom(why: string): void {
+    if (this.pipHandoff) return;
     if (this.disposed) {
       return;
     }
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
+    this.clearPipStart();
+    RetainedRoomPlayback.release(this.playbackOwner);
     this.presentationActive = false;
     this.restoreSheetKeyboard();
     this.env.unsubscribeForeground(this.foregroundListener);
     this.clearPipCloseCheck();
     this.clearBackCapture();
     this.pip.dispose();
+    this.bullets.dispose();
+    this.pipDanmaku.dispose();
     this.videoXc = null;
+    this.mainDanmaku = null;
     this.clearPipGrace();
     BackgroundAudio.detach(this.audioOwner);
     this.model.dispose();
     AppEnv.inst.setKeepScreenOn(false);
     AppEnv.inst.setBrightness(-1);
+    this.fullscreenTarget = false;
     if (this.fullscreen) {
-      AppEnv.inst.setImmersive(false);
-      AppEnv.inst.setLandscape(false);
+      this.env.setImmersive(false);
+      this.env.setLandscape(false);
     }
     clearTimeout(this.hideTimer);
     clearTimeout(this.panelHideTimer);
@@ -271,6 +320,7 @@ export struct LiveRoomPage {
         this.pausedByBackground = false;
         this.model.resume();
       }
+      this.restoreMainDanmaku();
       this.onPlayState();
     }
   }
@@ -360,9 +410,95 @@ export struct LiveRoomPage {
   }
 
   private startPip(): void {
+    if (this.disposed || this.exiting || this.pipHandoff || this.pipStartRoom.length > 0) return;
+    this.pipStartRoom = `${this.model.siteId}_${this.model.roomId}`;
+    this.pipStartTimer = setTimeout(() => {
+      this.pipStartTimer = -1;
+      if (this.pipStartRoom.length === 0 || this.disposed) return;
+      this.clearPipStart();
+      this.pip.stop().catch(() => {});
+      promptAction.showToast({ message: '画中画暂不可用' });
+    }, 4000);
     this.pip.start().catch(() => {
-      if (!this.disposed) promptAction.showToast({ message: '画中画暂不可用' });
+      if (this.disposed || this.pipStartRoom.length === 0) return;
+      this.clearPipStart();
+      promptAction.showToast({ message: '画中画暂不可用' });
     });
+  }
+
+  private clearPipStart(): void {
+    this.pipStartRoom = '';
+    if (this.pipStartTimer >= 0) clearTimeout(this.pipStartTimer);
+    this.pipStartTimer = -1;
+  }
+
+  private onPipStarted(): void {
+    if (this.disposed) return;
+    this.pipShown = true;
+    this.pipDanmaku.setVisible(true);
+    this.onBulletPresentation();
+    if (this.pipStartRoom.length === 0) return;
+    const room = this.pipStartRoom;
+    this.clearPipStart();
+    if (this.exiting || room !== `${this.model.siteId}_${this.model.roomId}` ||
+      !Nav.isLiveOwner(this.playbackOwner)) return;
+    this.pipHandoff = true;
+    this.presentationActive = false;
+    this.model.setChatActive(false);
+    this.restoreSheetKeyboard();
+    this.sheet = '';
+    clearTimeout(this.hideTimer);
+    clearTimeout(this.hudTimer);
+    clearTimeout(this.panelHideTimer);
+    this.env.setKeepScreenOn(false);
+    this.env.setBrightness(-1);
+    RetainedRoomPlayback.retain(this.playbackOwner, () => {
+      this.pipHandoff = false;
+      this.disposeRoom('retained PiP closed');
+    });
+    const leave = (): void => {
+      if (!this.disposed && this.pipHandoff) Nav.popLiveOwner(this.playbackOwner);
+    };
+    const restoreWindow = this.fullscreen || this.fullscreenTarget;
+    this.fullscreenTarget = false;
+    if (restoreWindow) {
+      this.fullscreen = false;
+      this.env.setImmersive(false);
+      this.env.setLandscape(false);
+      leave();
+    } else {
+      leave();
+    }
+  }
+
+  private onPipStopped(restoring: boolean): void {
+    if (this.disposed || restoring) return;
+    this.clearPipStart();
+    this.bullets.clear();
+    if (this.pipHandoff) {
+      this.pipHandoff = false;
+      this.disposeRoom('PiP window closed');
+    }
+  }
+
+  private restoreMainDanmaku(): void {
+    if (this.disposed || !this.presentationActive || !this.env.foreground || this.pipShown) return;
+    this.bullets.bindMain(this.mainDanmaku);
+    this.onBulletPresentation();
+  }
+
+  private onRoomShown(): void {
+    if (this.disposed) return;
+    this.pipHandoff = false;
+    RetainedRoomPlayback.release(this.playbackOwner);
+    this.presentationActive = true;
+    this.restoreMainDanmaku();
+    this.exiting = false;
+    this.backIssued = false;
+    this.syncSettings();
+    this.onChatPresentation();
+    this.onPlayState();
+    this.armHide();
   }
 
   @Monitor('model.player.videoWidth', 'model.player.videoHeight')
@@ -461,20 +597,13 @@ export struct LiveRoomPage {
   // ---------- behaviour ----------
 
   private setFullscreen(on: boolean, animated: boolean = true): void {
-    if (on === this.fullscreen) {
-      return;
-    }
-    AppEnv.inst.setImmersive(on);
-    // Do not feed the resized window's aspect ratio back into orientation. A portrait device
-    // would otherwise alternate between landscape and auto rotation on every resize event.
-    AppEnv.inst.setLandscape(on);
-    if (!on) {
-      this.scToast = null;
-    }
+    if (this.disposed || this.pipHandoff || on === this.fullscreenTarget) return;
+    this.fullscreenTarget = on;
+    this.env.setImmersive(on);
+    this.env.setLandscape(on);
+    if (!on) this.scToast = null;
     if (animated && !this.env.reduceMotion) {
-      this.getUIContext().animateTo({ curve: Motion.hero }, () => {
-        this.fullscreen = on;
-      });
+      this.getUIContext().animateTo({ curve: Motion.hero }, () => { this.fullscreen = on; });
     } else {
       this.fullscreen = on;
     }
@@ -608,7 +737,7 @@ export struct LiveRoomPage {
     if (this.disposed) return;
     if (!this.sleepPopIssued) {
       this.sleepPopIssued = true;
-      Nav.stack.pop();
+      Nav.popLiveOwner(this.playbackOwner);
     }
     if (this.env.foreground && !this.sleepNoticeShown) {
       this.sleepNoticeShown = true;
@@ -629,12 +758,9 @@ export struct LiveRoomPage {
         this.sleepTimer = -1;
       }
       this.clearPipGrace();
-      this.pip.dispose();
-      BackgroundAudio.detach(this.audioOwner);
-      this.model.dispose();
-      AppEnv.inst.setKeepScreenOn(false);
-      // Remove the destination even when only PiP is visible; never pop it again on resume.
+      this.pipHandoff = false;
       this.finishSleep();
+      this.disposeRoom('sleep deadline');
     }
   }
 
@@ -683,7 +809,7 @@ export struct LiveRoomPage {
   }
 
   private goBack(): void {
-    if (this.exiting || this.disposed) return;
+    if (this.exiting || this.disposed || this.pipHandoff) return;
     this.exiting = true;
     // Shrink the picture the viewer was actually watching, not the stale card thumbnail. The grab
     // is short and bounded; a slow or failed one falls back to the cover.
@@ -984,7 +1110,7 @@ export struct LiveRoomPage {
       IconButton({ dim: 44,
         icon: this.fullscreen ? $r('sys.symbol.arrow_down_right_and_arrow_up_left') :
           $r('sys.symbol.arrow_up_left_and_arrow_down_right'),
-        glass: true, label: this.fullscreen ? '退出全屏' : '全屏', onTap: () => this.setFullscreen(!this.fullscreen)
+        glass: true, label: this.fullscreen ? '退出全屏' : '全屏', onTap: () => this.setFullscreen(!this.fullscreenTarget)
       })
     }
     .width('100%')
@@ -1077,13 +1203,17 @@ export struct LiveRoomPage {
         model: this.model,
         fill: this.fillVideo,
         danmakuOn: this.danmakuEnabled,
-        presentationActive: this.env.foreground && this.presentationActive,
+        presentationActive: this.env.foreground && this.presentationActive && !this.pipShown,
+        onDanmaku: (engine: DanmakuEngine | null) => {
+          if (engine !== null) this.mainDanmaku = engine;
+          this.bullets.bindMain(engine);
+        },
         styleVersion: this.danmakuStyleVersion,
         cornerRadius: this.fullscreen ? 0 : Radius.xl,
         onSurface: (xc: XComponentController) => {
           if (this.disposed) return;
           this.videoXc = xc;
-          this.pip.attach(AppEnv.inst.context, xc, Nav.id);
+          this.pip.attach(AppEnv.inst.context, xc, Nav.id, this.pipDanmaku);
         }
       })
 
@@ -1130,7 +1260,7 @@ export struct LiveRoomPage {
     .gesture(
       GestureGroup(GestureMode.Exclusive,
         TapGesture({ count: 2 })
-          .onAction(() => this.setFullscreen(!this.fullscreen)),
+          .onAction(() => this.setFullscreen(!this.fullscreenTarget)),
         TapGesture({ count: 1 })
           .onAction(() => this.toggleControls()),
         LongPressGesture({ duration: 450 })
@@ -1499,6 +1629,7 @@ export struct LiveRoomPage {
     // Transparent: the page below stays visible while this room's background fades in and out.
     .backgroundColor(Color.Transparent)
     .onReady((ctx: NavDestinationContext) => this.onReady(ctx))
+    .onShown(() => this.onRoomShown())
     .onBackPressed(() => this.onBack())
     .onWillDisappear(() => this.disposeRoom('navigation'))
     .customTransition((operation: NavigationOperation, isEnter: boolean) => this.roomTransition(operation, isEnter))

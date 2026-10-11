@@ -23,6 +23,7 @@ export class BulletDelay {
   private queue: PendingBullet[] = [];
   private timer: number = -1;
   private lastAt: number = 0;
+  private ready: boolean = true;
   private sink: (text: string, color: number) => void;
   private delayOf: () => number;
   private now: () => number;
@@ -37,7 +38,7 @@ export class BulletDelay {
   push(text: string, color: number): void {
     const now = this.now();
     const delay = Math.max(0, this.delayOf());
-    if (delay <= 0 && this.queue.length === 0) {
+    if (this.ready && delay <= 0 && this.queue.length === 0) {
       this.sink(text, color);
       return;
     }
@@ -51,6 +52,18 @@ export class BulletDelay {
     this.schedule();
   }
 
+  /** Keep original deadlines while the PiP presentation node is being attached. */
+  setReady(ready: boolean): void {
+    if (this.ready === ready) return;
+    this.ready = ready;
+    if (!ready) {
+      if (this.timer >= 0) clearTimeout(this.timer);
+      this.timer = -1;
+    } else {
+      this.flush();
+    }
+  }
+
   clear(): void {
     this.queue = [];
     this.lastAt = 0;
@@ -61,7 +74,7 @@ export class BulletDelay {
   }
 
   private schedule(): void {
-    if (this.timer >= 0 || this.queue.length === 0) {
+    if (!this.ready || this.timer >= 0 || this.queue.length === 0) {
       return;
     }
     this.timer = setTimeout(() => {
@@ -71,6 +84,7 @@ export class BulletDelay {
   }
 
   private flush(): void {
+    if (!this.ready) return;
     const now = this.now();
     while (this.queue.length > 0 && this.queue[0].at <= now) {
       const b = this.queue.shift() as PendingBullet;

@@ -1,5 +1,6 @@
 import { displaySync } from '@kit.ArkGraphics2D';
 import { Settings } from '../app/Settings';
+import { BulletRenderer } from './RoomBulletDelivery';
 
 class Bullet {
   text: string = '';
@@ -21,7 +22,7 @@ function cssColor(rgb: number): string {
  * Scrolling danmaku renderer. Bullets are laid out in lanes and advanced every vsync
  * (up to the panel's 144Hz) on a single Canvas with bounded live and waiting queues.
  */
-export class DanmakuEngine {
+export class DanmakuEngine implements BulletRenderer {
   private ctx: CanvasRenderingContext2D;
   private sync: displaySync.DisplaySync | null = null;
   private bullets: Bullet[] = [];
@@ -130,6 +131,22 @@ export class DanmakuEngine {
     this.appliedFill = '';
     this.ctx.clearRect(0, 0, this.w, this.h);
     this.cleared = true;
+  }
+
+  /** A delivery target can belong to the main window or the PiP window. */
+  pushScoped(text: string, color: number): void {
+    this.runScoped(() => this.push(text, color));
+  }
+
+  setActive(visible: boolean): void {
+    if (this.visible === visible && (visible || (!this.running && this.cleared))) return;
+    this.visible = visible;
+    if (!visible) {
+      this.runScoped(() => {
+        this.clear();
+        this.stop();
+      });
+    }
   }
 
   push(text: string, color: number): void {

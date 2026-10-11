@@ -2,7 +2,6 @@ import { RoomModel } from './RoomModel';
 import { PlayState } from '../player/LivePlayer';
 import { PlayerEngine } from '../player/PlayerApi';
 import { DanmakuCanvas, DanmakuEngine } from '../danmaku/DanmakuCanvas';
-import { BULLET_LEAD_MS, BulletDelay } from '../danmaku/BulletDelay';
 import { C, Motion, Radius } from '../theme/Theme';
 import { NetImage } from '../components/Basics';
 
@@ -20,6 +19,7 @@ export struct VideoLayer {
   @Param cornerRadius: number = 0;
   /** Receives the surface controller whenever the XComponent loads (used for picture-in-picture). */
   @Event onSurface: (xc: XComponentController) => void = () => {};
+  @Event onDanmaku: (engine: DanmakuEngine | null) => void = () => {};
   @Local boxW: number = 0;
   @Local boxH: number = 0;
   @Local noticeText: string = '';
@@ -28,45 +28,9 @@ export struct VideoLayer {
   private nativeId: string = `lumen_video_${VideoLayer.nextId++}`;
   private static nextId: number = 0;
   private noticeTimer: number = -1;
-  private bullets: BulletDelay | null = null;
-  private bulletReceiver: ((text: string, color: number) => void) | null = null;
-  private mounted: boolean = false;
-
-  aboutToAppear(): void {
-    this.mounted = true;
-  }
-
-  @Monitor('danmakuOn', 'presentationActive')
-  onBulletActivity(): void {
-    if (!this.danmakuOn || !this.presentationActive) this.bullets?.clear();
-  }
-
-  private bindBullets(engine: DanmakuEngine | null): void {
-    this.bullets?.clear();
-    this.bullets = null;
-    if (this.model.onBullet === this.bulletReceiver) this.model.onBullet = null;
-    this.bulletReceiver = null;
-    if (engine === null || !this.mounted) return;
-    // Flying danmaku follows the picture; side chat and protocol liveness are independent.
-    const context = this.getUIContext();
-    const delay = new BulletDelay((text: string, color: number) => {
-      if (this.mounted && this.bullets === delay && this.danmakuOn && this.presentationActive) {
-        context.runScopedTask(() => engine.push(text, color));
-      }
-    }, () => this.model.player.latencyMs - BULLET_LEAD_MS);
-    this.bullets = delay;
-    this.bulletReceiver = (text: string, color: number) => {
-      if (this.mounted && this.bullets === delay && this.danmakuOn && this.presentationActive) {
-        delay.push(text, color);
-      }
-    };
-    this.model.onBullet = this.bulletReceiver;
-  }
-
   /** Room switched from the follow drawer: bring the cover back for a cross-fade. */
   @Monitor('model.switchSeq')
   onSwitch(): void {
-    this.bullets?.clear();
     this.model.player.firstFrame = false;
   }
 
@@ -83,8 +47,7 @@ export struct VideoLayer {
   }
 
   aboutToDisappear(): void {
-    this.mounted = false;
-    this.bindBullets(null);
+    this.onDanmaku(null);
     if (this.noticeTimer >= 0) {
       clearTimeout(this.noticeTimer);
     }
@@ -167,7 +130,7 @@ export struct VideoLayer {
       DanmakuCanvas({
         visible: this.danmakuOn && this.presentationActive,
         styleVersion: this.styleVersion,
-        bind: (engine: DanmakuEngine | null) => this.bindBullets(engine)
+        bind: (engine: DanmakuEngine | null) => this.onDanmaku(engine)
       })
         .width('100%')
         .height('100%')
