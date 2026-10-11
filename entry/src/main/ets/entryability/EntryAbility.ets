@@ -6,6 +6,7 @@ import { Settings } from '../app/Settings';
 import { FollowStore, HistoryStore } from '../app/Stores';
 import { BiliSession } from '../app/BiliSession';
 import { Log } from '../util/Log';
+import { RetainedRoomPlayback } from '../app/RetainedRoomPlayback';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -37,10 +38,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    RetainedRoomPlayback.close();
     AppEnv.detachWindow();
   }
 
   onDestroy(): void {
+    RetainedRoomPlayback.close();
     Settings.inst.flushOnExit();
     AppEnv.detachWindow();
     AppEnv.inst.context = null;

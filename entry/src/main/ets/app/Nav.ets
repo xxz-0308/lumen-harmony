@@ -1,4 +1,5 @@
 import { LiveRoomItem, LiveSubCategory, SiteId } from '../core/model/Models';
+import { RetainedRoomPlayback } from './RetainedRoomPlayback';
 
 export class Routes {
   static readonly live: string = 'live';
@@ -12,6 +13,7 @@ export class Routes {
 export class LiveRouteParam {
   siteId: SiteId = 'huya';
   roomId: string = '';
+  owner: number = 0;
   /** Card data shown instantly while the room detail loads. */
   preview: LiveRoomItem | null = null;
   /** Window rect (vp) of the tapped card's cover; the cover morphs into the player. w < 0 = unknown. */
@@ -52,6 +54,7 @@ export class Nav {
   }
 
   private static pushLive(p: LiveRouteParam): void {
+    RetainedRoomPlayback.close();
     const top = Nav.stack.getAllPathName();
     // switching rooms from inside a room replaces instead of stacking rooms
     if (top.length > 0 && top[top.length - 1] === Routes.live) {
@@ -78,6 +81,18 @@ export class Nav {
   static openHistory(): void { Nav.openSection(Routes.history); }
   static openSettings(): void { Nav.openSection(Routes.settings); }
   static openAccount(): void { Nav.openSection(Routes.account); }
+
+  static isLiveOwner(owner: number): boolean {
+    const paths = Nav.stack.getAllPathName();
+    const index = paths.length - 1;
+    if (index < 0 || paths[index] !== Routes.live) return false;
+    const param = Nav.stack.getParamByIndex(index) as LiveRouteParam;
+    return param.owner === owner;
+  }
+
+  static popLiveOwner(owner: number): void {
+    if (Nav.isLiveOwner(owner)) Nav.stack.pop(false);
+  }
 
   static back(): void {
     Nav.stack.pop();

@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { transform } from 'esbuild';
 import { PlayState } from '../../entry/src/main/ets/player/PlayerApi';
 import { isNarrowTheater, showTheaterPanel } from '../../entry/src/main/ets/room/TheaterLayout';
-import { BulletDelay, BULLET_LEAD_MS } from '../../entry/src/main/ets/danmaku/BulletDelay';
+import { RoomBulletDelivery } from '../../entry/src/main/ets/danmaku/RoomBulletDelivery';
+import { RetainedRoomPlayback } from '../../entry/src/main/ets/app/RetainedRoomPlayback';
 
 // Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
@@ -15,7 +16,7 @@ async function logicStruct(file: string, name: string, end: string, mocks: Recor
   assert.ok(start >= marker.length);
   let body = src.slice(start, src.indexOf(end, start));
   body = body.replace(/^\s*@(Param|Local|Event|BuilderParam)\s+/gm, '\n  ')
-    .replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n')
+    .replace(/^\s*@Monitor\([\s\S]*?\)\s*\n/gm, '\n')
     .replace(/^\s*@Computed\s*\n/gm, '\n');
   const constants = (src.match(/^const (INFO_H|GAP): number = \d+;/gm) ?? []).join('\n');
   const key = `__fixture_${name}`;
@@ -62,7 +63,8 @@ const env: any = {
   winWidth:1200, winHeight:800, statusBarHeight:20, navBarHeight:20, reduceMotion:false, foreground:false,
   subscribeForeground:()=>effects.push('subscribe'), unsubscribeForeground:()=>effects.push('unsubscribe'),
   setKeepScreenOn:()=>effects.push('screen'), setBrightness:()=>effects.push('brightness'),
-  setImmersive:()=>{}, setLandscape:()=>{}
+  setImmersive:()=>{}, setLandscape:()=>{},
+  enterVideoFullscreen:async()=>{},exitVideoFullscreen:async()=>{}
 };
 class Model {
   siteId='huya'; roomId='1'; preview=null; disposals=0;chatActive=true;
@@ -79,13 +81,15 @@ class Pip {
   setPlaying(){ effects.push('pip-playing'); }
   setAutoStart(){ effects.push('pip-auto'); }
   start(){ return pipStart.promise; }
+  async stop(){}
 }
 class Route { coverW=300; coverH=169; coverX=20; coverY=30; preview=null; }
 try {
   const Page = await logicStruct('../../../entry/src/main/ets/pages/LiveRoomPage.ets', 'LiveRoomPage', '  // ---------- builders ----------', {
     RoomModel:Model, AppEnv:{inst:env}, Settings:{inst:settings}, LivePip:Pip, LiveRouteParam:Route,
     BackgroundAudio:{detach:()=>effects.push('detach'), setMetadata:()=>effects.push('metadata'), update:()=>effects.push('audio')},
-    Nav:{stack:{pop:()=>pops++}}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
+    RoomBulletDelivery,RetainedRoomPlayback,PipDanmakuController:class{setVisible(){}setEnabled(){}setStyleVersion(){}dispose(){}},
+    Nav:{stack:{pop:()=>pops++},isLiveOwner:()=>true,popLiveOwner:()=>pops++}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
     Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0}, KeyboardAvoidMode:{RESIZE:2},
@@ -306,26 +310,11 @@ try {
   p.disposeRoom('navigation');p.syncSettings();assert.equal(p.model.volumeWrites.length,2);
   settings.appVolume=priorVolume;settings.sideChat=!settings.sideChat;
   const Video=await logicStruct('../../../entry/src/main/ets/room/VideoLayer.ets','VideoLayer','  /** Video frame size',{
-    RoomModel:Model,XComponentController:class{},BulletDelay,BULLET_LEAD_MS
+    RoomModel:Model,XComponentController:class{}
   });
-  const video=new Video();let scopedDraws=0;
-  video.getUIContext=()=>({runScopedTask:(task:()=>void)=>{scopedDraws++;task();}});
-  video.aboutToAppear();video.model.player.latencyMs=6000;
-  const painted:string[]=[];video.bindBullets({push:(text:string)=>painted.push(text)});
-  const oldReceiver=video.model.onBullet;oldReceiver('pending',0xffffff);assert.equal(clock.jobs.size,idleJobs+1);
-  video.danmakuOn=false;video.onBulletActivity();oldReceiver('disabled',0xffffff);
-  assert.equal(clock.jobs.size,idleJobs,'danmaku-off cancels delay and does not accept hidden intake');
-  video.danmakuOn=true;video.model.player.latencyMs=0;video.onBulletActivity();oldReceiver('new',0xffffff);
-  assert.deepEqual(painted,['new'],'re-enable does not replay the disabled backlog');
-  video.presentationActive=false;video.onBulletActivity();oldReceiver('background',0xffffff);
-  assert.deepEqual(painted,['new']);video.presentationActive=true;
-  video.bindBullets({push:(text:string)=>painted.push(text)});oldReceiver('retired',0xffffff);
-  video.model.onBullet('current',0xffffff);assert.deepEqual(painted,['new','current']);
-  assert.equal(scopedDraws,2,'only eligible deliveries enter the owning UI context');
-  const currentReceiver=video.model.onBullet;video.aboutToDisappear();currentReceiver('detached',0xffffff);
-  assert.equal(video.model.onBullet,null);assert.equal(clock.jobs.size,idleJobs);
-  video.aboutToAppear();video.bindBullets({push:()=>{}});const replacement=()=>{};video.model.onBullet=replacement;
-  video.aboutToDisappear();assert.equal(video.model.onBullet,replacement,'cleanup only unbinds the callback it owns');
+  const video=new Video();const receiver=()=>{};video.model.onBullet=receiver;
+  let unbound=0;video.onDanmaku=(engine:any)=>{if(engine===null)unbound++;};video.aboutToDisappear();
+  assert.equal(unbound,1);assert.equal(video.model.onBullet,receiver,'video presentation cannot replace the session-owned bullet receiver');
   let canvasStops=0,canvasClears=0;
   const CanvasHost=await logicStruct('../../../entry/src/main/ets/danmaku/DanmakuCanvas.ets','DanmakuCanvas','  build() {',{
     RenderingContextSettings:class{},CanvasRenderingContext2D:class{},DanmakuEngine:class{
@@ -335,6 +324,25 @@ try {
   const host=new CanvasHost();host.visible=false;host.onVisible();
   assert.equal(canvasClears,1);assert.equal(canvasStops,1,'hiding parks display synchronization immediately');
   assert.equal(host.engine.visible,false);
+  p=fresh();env.foreground=true;pipStart=deferred<void>();const beforeHandoff=pops;
+  p.startPip();p.startPip();p.pip.handlers.onActive(true,false);
+  assert.equal(pops,beforeHandoff,'ABOUT_TO_START alone cannot pop the room');
+  p.pip.handlers.onStarted();assert.equal(pops,beforeHandoff+1);assert.equal(p.presentationActive,false);
+  p.disposeRoom('navigation');assert.equal(p.model.disposals,0,'confirmed handoff retains the SDK-cached surface owner');
+  p.pip.handlers.onStarted();assert.equal(pops,beforeHandoff+1,'repeated started events cannot pop twice');
+  p.pip.handlers.onStopped(false);assert.equal(p.model.disposals,1,'closing detached PiP ends its session once');
+  p=fresh();pipStart=deferred<void>();p.startPip();p.pip.handlers.onStarted();
+  p.pip.handlers.onStopped(true);assert.equal(p.model.disposals,0);p.onRoomShown();assert.equal(p.presentationActive,true);
+  p.disposeRoom('navigation');assert.equal(p.model.disposals,1,'restored rooms retain ordinary Back cleanup');
+  p=fresh();pipStart=deferred<void>();const beforeFailure=pops;p.startPip();pipStart.reject(new Error('fixture start failure'));await flush();
+  assert.equal(pops,beforeFailure);assert.equal(p.pipStartRoom,'');p.disposeRoom('navigation');
+  p=fresh();env.foreground=true;p.model.player.latencyMs=0;
+  let restoredBullets=0;const cachedEngine={active:false,setActive(active:boolean){this.active=active;},pushScoped(){assert.equal(this.active,true);restoredBullets++;}};
+  p.mainDanmaku=cachedEngine;p.bullets.bindMain(cachedEngine);p.onBulletPresentation();
+  p.pipShown=true;p.onBulletPresentation();p.bullets.bindMain(null);
+  p.pipShown=false;p.restoreMainDanmaku();p.bullets.push('restored fixture',0xffffff);
+  assert.equal(restoredBullets,1,'PiP return explicitly reattaches the SDK-cached main Canvas even without onReady');
+  p.disposeRoom('navigation');
   const rootEnv={foreground:true};let rootRefreshes=0;
   const rootFollows={lastRefreshAt:Date.now(),refreshAll:()=>{rootRefreshes++;rootFollows.lastRefreshAt=Date.now();}};
   const Root=await logicStruct('../../../entry/src/main/ets/pages/Index.ets','Index','  private select(',{

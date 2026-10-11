@@ -1,4 +1,4 @@
-import { PiPWindow } from '@kit.ArkUI';
+import { NodeController, PiPWindow } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { Log } from '../util/Log';
 
@@ -7,6 +7,8 @@ export interface PipHandlers {
   pause: () => void;
   /** PiP started or stopped; `restoring` is true when the user tapped back into the app. */
   onActive: (active: boolean, restoring: boolean) => void;
+  onStarted?: () => void;
+  onStopped?: (restoring: boolean) => void;
 }
 
 /**
@@ -27,6 +29,8 @@ export class LivePip {
   private disposed: boolean = false;
   private restoring: boolean = false;
   active: boolean = false;
+  started: boolean = false;
+  private stopNotified: boolean = false;
 
   constructor(handlers: PipHandlers) {
     this.handlers = handlers;
@@ -41,7 +45,8 @@ export class LivePip {
   }
 
   /** Called whenever the video XComponent (re)loads; a new controller replaces a stale one. */
-  attach(context: common.UIAbilityContext | null, xc: XComponentController, navigationId: string): void {
+  attach(context: common.UIAbilityContext | null, xc: XComponentController, navigationId: string,
+    customUI?: NodeController): void {
     if (this.disposed || context === null || !LivePip.supported()) {
       return;
     }
@@ -59,7 +64,8 @@ export class LivePip {
       templateType: PiPWindow.PiPTemplateType.VIDEO_LIVE,
       controlGroups: [PiPWindow.VideoLiveControlGroup.VIDEO_PLAY_PAUSE],
       contentWidth: this.width,
-      contentHeight: this.height
+      contentHeight: this.height,
+      customUIController: customUI
     };
     PiPWindow.create(config).then((c: PiPWindow.PiPController) => {
       if (this.disposed || generation !== this.generation || this.xc !== xc) {
@@ -104,11 +110,19 @@ export class LivePip {
       this.restoring = true;
     } else if (state === PiPWindow.PiPState.ABOUT_TO_START) {
       this.restoring = false;
+      this.stopNotified = false;
     }
+    const wasStarted = this.started;
+    this.started = state === PiPWindow.PiPState.STARTED;
     const active = state === PiPWindow.PiPState.ABOUT_TO_START || state === PiPWindow.PiPState.STARTED;
     if (active !== this.active) {
       this.active = active;
       this.handlers.onActive(active, this.restoring);
+    }
+    if (this.started && !wasStarted) this.handlers.onStarted?.();
+    if ((state === PiPWindow.PiPState.STOPPED || state === PiPWindow.PiPState.ERROR) && !this.stopNotified) {
+      this.stopNotified = true;
+      this.handlers.onStopped?.(this.restoring);
     }
     if (state === PiPWindow.PiPState.ERROR) {
       Log.w('pip', 'PiP window error');
@@ -151,6 +165,10 @@ export class LivePip {
     }
   }
 
+  async stop(): Promise<void> {
+    await this.controller?.stopPiP();
+  }
+
   private applyAutoStart(): void {
     try {
       this.controller?.setAutoStartEnabled(this.autoStart);
@@ -176,6 +194,7 @@ export class LivePip {
     this.xc = null;
     const wasActive = this.active;
     this.active = false;
+    this.started = false;
     this.restoring = false;
     if (c === null) {
       if (wasActive && !this.disposed) {
