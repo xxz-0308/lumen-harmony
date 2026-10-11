@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { transform } from 'esbuild';
 import { PlayState } from '../../entry/src/main/ets/player/PlayerApi';
+import { isNarrowTheater, showTheaterPanel } from '../../entry/src/main/ets/room/TheaterLayout';
 
 // Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
@@ -62,7 +63,8 @@ const env: any = {
   setImmersive:()=>{}, setLandscape:()=>{}
 };
 class Model {
-  siteId='huya'; roomId='1'; preview=null; disposals=0;
+  siteId='huya'; roomId='1'; preview=null; disposals=0;chatActive=true;
+  setChatActive(active:boolean){this.chatActive=active;}
   player={ firstFrame:true, state:2, wantsPlayback:true, pause:()=>{}, setVolume:()=>{} };
   dispose(){ this.disposals++; this.player.state=0; }
 }
@@ -84,7 +86,7 @@ try {
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
     Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0}, KeyboardAvoidMode:{RESIZE:2},
-    isNarrowTheater:(w:number)=>w<900, showTheaterPanel:()=>true
+    isNarrowTheater, showTheaterPanel
   });
   const fresh = () => {
     const p = new Page();
@@ -267,18 +269,27 @@ try {
   p.openSheet('sleep');p.disposeRoom('navigation');assert.equal(keyboardMode,1,'disposal restores the previous keyboard policy');
   p.openSheet('sleep');assert.equal(keyboardMode,1);
   let chatScrolls=0;
-  const chatModel={chats:[] as {id:number}[]};
+  const chatModel={chats:[] as {id:number}[],chatCount:0};
   const Chat=await logicStruct('../../../entry/src/main/ets/room/RoomPanels.ets','ChatList','  build() {',{
     RoomModel:class{chats=[];},ListScroller:class{scrollEdge(){chatScrolls++;}},Edge:{Bottom:0}
   });
   const chat=new Chat();chat.model=chatModel;chat.active=false;chat.aboutToAppear();
   const idleJobs=clock.jobs.size;
-  chatModel.chats=[{id:1}];chat.onChats();assert.equal(clock.jobs.size,idleJobs,'hidden chat never schedules scrolling');
+  chatModel.chats=[{id:1}];chatModel.chatCount=1;chat.onChats();assert.equal(clock.jobs.size,idleJobs,'hidden chat never schedules scrolling');
   chat.active=true;chat.onActive();clock.advance(0);assert.equal(chatScrolls,1,'a following chat reconciles once on activation');
-  chatModel.chats=[{id:1},{id:2}];chat.onChats();chat.active=false;chat.onActive();clock.advance(0);
+  chatModel.chats=[{id:1},{id:2}];chatModel.chatCount=2;chat.onChats();chat.active=false;chat.onActive();clock.advance(0);
   assert.equal(chatScrolls,1,'hiding cancels pending scroll work');
-  chat.following=false;chat.active=true;chat.onActive();chatModel.chats=[{id:1},{id:2},{id:3}];chat.onChats();clock.advance(0);
+  chat.following=false;chat.active=true;chat.onActive();chatModel.chats=[{id:1},{id:2},{id:3}];chatModel.chatCount=3;chat.onChats();clock.advance(0);
   assert.equal(chatScrolls,1,'activation and new messages preserve manual scroll position');assert.equal(chat.unseen,1);
+  chatModel.chatCount=303;chat.onChats();assert.equal(chat.unseen,301,'unread counts use received progress beyond the retained row cap');
+  p=fresh();env.foreground=true;p.onChatPresentation();assert.equal(p.model.chatActive,true);
+  p.panelTab=1;p.onChatPresentation();assert.equal(p.model.chatActive,false);
+  p.panelTab=0;p.panelOpen=false;p.onChatPresentation();assert.equal(p.model.chatActive,false);
+  p.fullscreen=true;p.sideChatEnabled=true;p.danmakuEnabled=false;p.controls=false;p.onChatPresentation();
+  assert.equal(p.model.chatActive,true,'fullscreen chat stays active independently of flying bullets and controls');
+  p.sideChatEnabled=false;p.onChatPresentation();assert.equal(p.model.chatActive,false);
+  p.sideChatEnabled=true;env.foreground=false;p.onChatPresentation();assert.equal(p.model.chatActive,false);
+  p.disposeRoom('navigation');env.foreground=true;p.onChatPresentation();assert.equal(p.model.chatActive,false);
   chat.following=true;chat.onChats();chat.aboutToDisappear();clock.advance(0);chat.onChats();
   assert.equal(chatScrolls,1,'detached chat cannot scroll or schedule tasks');assert.equal(clock.jobs.size,idleJobs);
   console.log('Component tasks: lifecycle, current intent, retained state, category reversal, dismissal, keyboard and hidden chat scrolling passed');

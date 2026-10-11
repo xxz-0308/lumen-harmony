@@ -152,10 +152,19 @@ export struct LiveRoomPage {
     this.danmakuStyleVersion++;
   }
 
+  @Monitor('env.foreground', 'fullscreen', 'panelOpen', 'drawerOpen', 'rootW', 'panelTab', 'sideChatEnabled')
+  onChatPresentation(): void {
+    if (this.disposed) return;
+    const active = this.env.foreground &&
+      (this.fullscreen ? this.sideChatEnabled : this.showPanel && this.panelTab === 0);
+    this.model.setChatActive(active);
+  }
+
   aboutToAppear(): void {
     if (this.disposed) return;
     this.env.subscribeForeground(this.foregroundListener);
     this.syncSettings();
+    this.onChatPresentation();
     // The cover must be available before the destination's first transition frame.
     this.model.preview = this.route.preview;
   }

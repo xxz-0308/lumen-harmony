@@ -76,20 +76,20 @@ export struct ChatList {
 
   aboutToAppear(): void {
     this.mounted = true;
-    this.lastCount = this.model.chats.length;
+    this.lastCount = this.model.chatCount;
     this.scrollToLatest();
   }
 
   @Monitor('model.chats')
   onChats(): void {
     if (!this.mounted) return;
-    const n = this.model.chats.length;
+    const n = this.model.chatCount;
     const added = Math.max(0, n - this.lastCount);
     this.lastCount = n;
     if (this.following) {
       this.scrollToLatest();
     } else {
-      this.unseen += added > 0 ? added : 1;
+      this.unseen += added;
     }
   }
 

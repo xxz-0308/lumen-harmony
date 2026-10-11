@@ -68,7 +68,11 @@ export class RoomModel {
   private seq: number = 0;
   private chatId: number = 0;
   private headers: Record<string, string> = {};
-  private pendingChats: ChatLine[] = [];
+  private retainedChats: ChatLine[] = [];
+  private retainedStart: number = 0;
+  private receivedChats: number = 0;
+  private publishedChats: number = 0;
+  private chatActive: boolean = true;
   private flushTimer: number = -1;
   private blockedPending: number = 0;
   private blockedTimer: number = -1;
@@ -348,6 +352,10 @@ export class RoomModel {
     this.qualities = [];
     this.lines = [];
     this.lineQualityIds = [];
+    this.retainedChats = [];
+    this.retainedStart = 0;
+    this.receivedChats = 0;
+    this.publishedChats = 0;
     this.chats = [];
     this.blockedChats = 0;
     this.danmakuConnected = false;
@@ -626,7 +634,6 @@ export class RoomModel {
       clearTimeout(this.flushTimer);
       this.flushTimer = -1;
     }
-    this.pendingChats = [];
     if (this.blockedTimer >= 0) {
       clearTimeout(this.blockedTimer);
       this.blockedTimer = -1;
@@ -634,7 +641,33 @@ export class RoomModel {
     this.blockedPending = 0;
   }
 
+  /** Progress belongs to the published snapshot, including batches beyond the 300-row cap. */
+  get chatCount(): number {
+    return this.publishedChats;
+  }
+
+  setChatActive(active: boolean): void {
+    if (this.disposed || this.chatActive === active) return;
+    this.chatActive = active;
+    if (this.flushTimer >= 0) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = -1;
+    }
+    if (active) this.publishChats();
+  }
+
+  private publishChats(): void {
+    if (this.disposed || !this.chatActive || this.publishedChats === this.receivedChats) return;
+    const snapshot: ChatLine[] = [];
+    for (let i = 0; i < this.retainedChats.length; i++) {
+      snapshot.push(this.retainedChats[(this.retainedStart + i) % MAX_CHAT]);
+    }
+    this.publishedChats = this.receivedChats;
+    this.chats = snapshot;
+  }
+
   private onMessage(m: LiveMessage): void {
+    if (this.disposed) return;
     if (m.type === LiveMessageType.Online) {
       if (m.online > 0) {
         this.online = m.online;
@@ -668,15 +701,21 @@ export class RoomModel {
     line.user = m.userName;
     line.text = m.text;
     line.color = m.color;
-    this.pendingChats.push(line);
-    // batch list updates so a busy room doesn't rebuild the chat list per message
-    if (this.flushTimer < 0) {
-      this.flushTimer = setTimeout(() => {
+    if (this.retainedChats.length < MAX_CHAT) {
+      this.retainedChats.push(line);
+    } else {
+      this.retainedChats[this.retainedStart] = line;
+      this.retainedStart = (this.retainedStart + 1) % MAX_CHAT;
+    }
+    this.receivedChats++;
+    // Retain live history independently of whether a chat consumer is currently visible.
+    if (this.chatActive && this.flushTimer < 0) {
+      const timer = setTimeout(() => {
+        if (this.flushTimer !== timer) return;
         this.flushTimer = -1;
-        const merged = this.chats.concat(this.pendingChats);
-        this.pendingChats = [];
-        this.chats = merged.length > MAX_CHAT ? merged.slice(merged.length - MAX_CHAT) : merged;
+        this.publishChats();
       }, 200);
+      this.flushTimer = timer;
     }
   }
 
@@ -691,6 +730,8 @@ export class RoomModel {
       this.expiryTimer = -1;
     }
     this.stopDanmaku();
+    this.retainedChats = [];
+    this.retainedStart = 0;
     this.player.release();
     this.onBullet = null;
   }
