@@ -603,6 +603,34 @@ for (const failure of ['send', 'queue-limit', 'commit-timeout', 'candidate-end',
   f.unblock(); await flush(); f.client.close();
 }
 
+{
+  const f=await relayFixture(1);
+  f.block();const external=new Uint8Array([9,1,2,3,8]);const view=external.subarray(1,4);
+  assert.equal(f.client.write(view),true);await flush();external.fill(7);f.unblock();await flush();
+  assert.deepEqual(f.sent.at(-1),new Uint8Array([1,2,3]),'ordinary callers and subarray offsets retain copy isolation');
+  assert.notEqual(f.sent.at(-1)!.buffer,external.buffer);
+  let assembled:Uint8Array|null=null,copies=0;
+  const writeOwned=f.client.writeOwned;
+  f.client.writeOwned=function(bytes:Uint8Array){
+    assembled=bytes;const buffer=bytes.buffer as ArrayBuffer;const slice=buffer.slice;
+    buffer.slice=function(begin:number,end?:number){copies++;return slice.call(this,begin,end);};
+    return writeOwned.call(this,bytes);
+  };
+  f.requests[0].data(av(2,2));await flush();
+  assert.ok(assembled);assert.equal(copies,0,'assembled media output is not copied a second time');
+  assert.equal(f.sent.at(-1)!.buffer,(assembled as unknown as Uint8Array).buffer,'owned payload lives through serial send acknowledgement');
+  assert.equal(f.client.queuedBytes,0);f.client.close();
+}
+{
+  const f=await relayFixture(1);const priorSend=f.conn.send;
+  f.conn.send=async(info:any)=>{const data=structuredClone(info.data,{transfer:[info.data]});await priorSend({data});};
+  const owned=new Uint8Array([4,5,6]);assert.equal(f.client.writeOwned(owned),true);await flush();
+  assert.equal(owned.byteLength,0,'fixture exercises native transfer/detachment');
+  assert.deepEqual(f.sent.at(-1),new Uint8Array([4,5,6]));
+  assert.equal(f.client.queuedBytes,0,'queue accounting uses the admitted length, not a possibly detached view');
+  f.client.close();assert.equal(f.client.writeOwned(new Uint8Array([7])),false);
+}
+
 // Actual RoomModel expiry callback + retry timer, with transport/player dependencies mocked.
 // No native player and no network: verifies integration decisions, not decoder continuity.
 const roomPath = fileURLToPath(new URL('../../../entry/src/main/ets/room/RoomModel.ets', import.meta.url));

@@ -309,7 +309,7 @@ class RelayClient {
       payload.set(frame, offset);
       offset += frame.length;
     }
-    if (!this.write(payload)) {
+    if (!this.writeOwned(payload)) {
       return;
     }
     this.windowOutBytes += total;
@@ -553,16 +553,27 @@ class RelayClient {
   }
 
   private write(bytes: Uint8Array): boolean {
+    return this.enqueue(bytes, false);
+  }
+
+  /** Only the freshly combined output relinquishes its buffer to the serial send queue. */
+  private writeOwned(bytes: Uint8Array): boolean {
+    return this.enqueue(bytes, true);
+  }
+
+  private enqueue(bytes: Uint8Array, owned: boolean): boolean {
     if (this.closed) {
       return false;
     }
-    if (this.queuedBytes + bytes.length > MAX_SEND_QUEUE) {
+    const length = bytes.byteLength;
+    if (this.queuedBytes + length > MAX_SEND_QUEUE) {
       Log.w('relay', 'player fell behind live stream');
       this.close();
       return false;
     }
-    this.queuedBytes += bytes.length;
-    const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    this.queuedBytes += length;
+    const payload = owned && bytes.byteOffset === 0 && length === bytes.buffer.byteLength ?
+      bytes.buffer as ArrayBuffer : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + length) as ArrayBuffer;
     this.writes = this.writes.then(async () => {
       try {
         if (!this.closed) {
@@ -571,13 +582,13 @@ class RelayClient {
           if (this.lastSendAt >= 0 && sentAt - this.lastSendAt > 200) {
             this.sendGaps++;
             if (this.sendGaps <= 6) {
-              Log.i('relay', `local send gap ${sentAt - this.lastSendAt}ms bytes=${bytes.length} queuedBytes=${this.queuedBytes}`);
+              Log.i('relay', `local send gap ${sentAt - this.lastSendAt}ms bytes=${length} queuedBytes=${this.queuedBytes}`);
             }
           }
           this.lastSendAt = sentAt;
         }
       } finally {
-        this.queuedBytes -= bytes.length;
+        this.queuedBytes -= length;
       }
     }).catch(() => this.close());
     return true;
