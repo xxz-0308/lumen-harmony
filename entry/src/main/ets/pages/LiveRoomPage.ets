@@ -42,6 +42,8 @@ export struct LiveRoomPage {
   @Local fillVideo: boolean = Settings.inst.videoFill;
   @Local followed: boolean = false;
   @Local danmakuStyleVersion: number = 0;
+  private appliedDanmakuStyle: string = '';
+  private appliedVolume: number = -1;
   @Local fullscreen: boolean = false;
   @Local presentationActive: boolean = true;
   @Local panelOpen: boolean = Settings.inst.theaterPanelOpen;
@@ -146,11 +148,24 @@ export struct LiveRoomPage {
   // ---------- lifecycle ----------
 
   private syncSettings(): void {
+    if (this.disposed) return;
     this.danmakuEnabled = this.settings.danmakuOn;
     this.sideChatEnabled = this.settings.sideChat;
     this.fillVideo = this.settings.videoFill;
-    this.model.player.setVolume(this.settings.volumeMode === 'app' ? this.settings.appVolume : 1);
-    this.danmakuStyleVersion++;
+    this.applyVolume(this.settings.volumeMode === 'app' ? this.settings.appVolume : 1);
+    const s = this.settings;
+    const style = `${s.danmakuSize}|${s.danmakuOpacity}|${s.danmakuSpeed}|${s.danmakuMax}|` +
+      `${s.danmakuArea}|${s.danmakuStroke}|${s.danmakuKeepColor}`;
+    if (style !== this.appliedDanmakuStyle) {
+      this.appliedDanmakuStyle = style;
+      this.danmakuStyleVersion++;
+    }
+  }
+
+  private applyVolume(volume: number): void {
+    if (volume === this.appliedVolume) return;
+    this.model.player.setVolume(volume);
+    this.appliedVolume = volume;
   }
 
   @Monitor('env.foreground', 'fullscreen', 'panelOpen', 'drawerOpen', 'rootW', 'panelTab', 'sideChatEnabled')
@@ -538,7 +553,8 @@ export struct LiveRoomPage {
   private changeVolume(v: number): void {
     if (this.disposed) return;
     if (this.settings.volumeMode === 'app') {
-      this.model.player.setVolume(v);
+      if (v === this.settings.appVolume && v === this.appliedVolume) return;
+      this.applyVolume(v);
       this.settings.appVolume = v;
       this.settings.scheduleSave();
       return;
@@ -556,7 +572,7 @@ export struct LiveRoomPage {
       if (!ok && !this.disposed && intent === this.mediaIntent &&
         roomKey === `${this.model.siteId}_${this.model.roomId}` && this.settings.volumeMode === 'media') {
         this.settings.volumeMode = 'app';
-        this.model.player.setVolume(this.settings.appVolume);
+        this.applyVolume(this.settings.appVolume);
         this.settings.scheduleSave();
         promptAction.showToast({ message: '系统媒体音量不可调，已切回应用音量' });
       }

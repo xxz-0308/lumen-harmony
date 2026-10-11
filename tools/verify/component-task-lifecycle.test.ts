@@ -66,7 +66,8 @@ const env: any = {
 class Model {
   siteId='huya'; roomId='1'; preview=null; disposals=0;chatActive=true;
   setChatActive(active:boolean){this.chatActive=active;}
-  player={ firstFrame:true, state:2, wantsPlayback:true, pause:()=>{}, setVolume:()=>{} };
+  volumeWrites:number[]=[];
+  player={ firstFrame:true, state:2, wantsPlayback:true, pause:()=>{}, setVolume:(v:number)=>this.volumeWrites.push(v) };
   dispose(){ this.disposals++; this.player.state=0; }
 }
 class Pip {
@@ -293,6 +294,16 @@ try {
   p.disposeRoom('navigation');env.foreground=true;p.onChatPresentation();assert.equal(p.model.chatActive,false);
   chat.following=true;chat.onChats();chat.aboutToDisappear();clock.advance(0);chat.onChats();
   assert.equal(chatScrolls,1,'detached chat cannot scroll or schedule tasks');assert.equal(clock.jobs.size,idleJobs);
+  p=fresh();p.syncSettings();const styleVersion=p.danmakuStyleVersion;
+  assert.deepEqual(p.model.volumeWrites,[settings.appVolume],'first sync applies the effective volume');
+  settings.sideChat=!settings.sideChat;(settings as any).showSuperChat=true;p.syncSettings();p.syncSettings();
+  assert.equal(p.danmakuStyleVersion,styleVersion,'side-chat, SC and identical slider values do not clear flying bullets');
+  assert.equal(p.model.volumeWrites.length,1,'unrelated settings do not write native volume');
+  (settings as any).danmakuSize=24;p.syncSettings();assert.equal(p.danmakuStyleVersion,styleVersion+1);
+  const priorVolume=settings.appVolume;p.changeVolume(0.4);p.changeVolume(0.4);p.syncSettings();
+  assert.deepEqual(p.model.volumeWrites,[priorVolume,0.4],'identical app-volume intent is applied once');
+  p.disposeRoom('navigation');p.syncSettings();assert.equal(p.model.volumeWrites.length,2);
+  settings.appVolume=priorVolume;settings.sideChat=!settings.sideChat;
   const Video=await logicStruct('../../../entry/src/main/ets/room/VideoLayer.ets','VideoLayer','  /** Video frame size',{
     RoomModel:Model,XComponentController:class{},BulletDelay,BULLET_LEAD_MS
   });
