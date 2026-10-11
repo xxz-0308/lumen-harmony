@@ -48,9 +48,10 @@ export struct VideoLayer {
     this.bulletReceiver = null;
     if (engine === null || !this.mounted) return;
     // Flying danmaku follows the picture; side chat and protocol liveness are independent.
+    const context = this.getUIContext();
     const delay = new BulletDelay((text: string, color: number) => {
       if (this.mounted && this.bullets === delay && this.danmakuOn && this.presentationActive) {
-        engine.push(text, color);
+        context.runScopedTask(() => engine.push(text, color));
       }
     }, () => this.model.player.latencyMs - BULLET_LEAD_MS);
     this.bullets = delay;

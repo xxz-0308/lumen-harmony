@@ -308,7 +308,9 @@ try {
   const Video=await logicStruct('../../../entry/src/main/ets/room/VideoLayer.ets','VideoLayer','  /** Video frame size',{
     RoomModel:Model,XComponentController:class{},BulletDelay,BULLET_LEAD_MS
   });
-  const video=new Video();video.aboutToAppear();video.model.player.latencyMs=6000;
+  const video=new Video();let scopedDraws=0;
+  video.getUIContext=()=>({runScopedTask:(task:()=>void)=>{scopedDraws++;task();}});
+  video.aboutToAppear();video.model.player.latencyMs=6000;
   const painted:string[]=[];video.bindBullets({push:(text:string)=>painted.push(text)});
   const oldReceiver=video.model.onBullet;oldReceiver('pending',0xffffff);assert.equal(clock.jobs.size,idleJobs+1);
   video.danmakuOn=false;video.onBulletActivity();oldReceiver('disabled',0xffffff);
@@ -319,6 +321,7 @@ try {
   assert.deepEqual(painted,['new']);video.presentationActive=true;
   video.bindBullets({push:(text:string)=>painted.push(text)});oldReceiver('retired',0xffffff);
   video.model.onBullet('current',0xffffff);assert.deepEqual(painted,['new','current']);
+  assert.equal(scopedDraws,2,'only eligible deliveries enter the owning UI context');
   const currentReceiver=video.model.onBullet;video.aboutToDisappear();currentReceiver('detached',0xffffff);
   assert.equal(video.model.onBullet,null);assert.equal(clock.jobs.size,idleJobs);
   video.aboutToAppear();video.bindBullets({push:()=>{}});const replacement=()=>{};video.model.onBullet=replacement;

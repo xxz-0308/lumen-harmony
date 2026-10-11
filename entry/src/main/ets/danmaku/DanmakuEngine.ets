@@ -37,10 +37,18 @@ export class DanmakuEngine {
   private appliedStroke: string = '';
   private appliedStrokeSize: number = 0;
   private appliedFill: string = '';
+  private runScoped: (task: () => void) => void = (task: () => void) => task();
+  private frameTimestamp: number = 0;
+  private frameTask: () => void = () => this.frame(this.frameTimestamp);
   visible: boolean = true;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  /** DisplaySync lifecycle and frame callbacks need the Canvas owner's UI instance. */
+  setScope(runScoped: (task: () => void) => void): void {
+    this.runScoped = runScoped;
   }
 
   resize(w: number, h: number): void {
@@ -88,11 +96,16 @@ export class DanmakuEngine {
     }
     this.running = true;
     this.lastTs = 0;
-    const s = displaySync.create();
-    s.setExpectedFrameRateRange({ expected: 120, min: 60, max: 144 });
-    s.on('frame', (info: displaySync.IntervalInfo) => this.frame(info.timestamp));
-    s.start();
-    this.sync = s;
+    this.runScoped(() => {
+      const s = displaySync.create();
+      s.setExpectedFrameRateRange({ expected: 120, min: 60, max: 144 });
+      s.on('frame', (info: displaySync.IntervalInfo) => {
+        this.frameTimestamp = info.timestamp;
+        this.runScoped(this.frameTask);
+      });
+      s.start();
+      this.sync = s;
+    });
   }
 
   stop(): void {
@@ -100,8 +113,10 @@ export class DanmakuEngine {
     const s = this.sync;
     this.sync = null;
     if (s !== null) {
-      s.stop();
-      s.off('frame');
+      this.runScoped(() => {
+        s.stop();
+        s.off('frame');
+      });
     }
   }
 

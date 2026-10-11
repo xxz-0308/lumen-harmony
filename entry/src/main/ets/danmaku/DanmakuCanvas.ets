@@ -39,6 +39,8 @@ export struct DanmakuCanvas {
       .height('100%')
       .hitTestBehavior(HitTestMode.None)
       .onReady(() => {
+        const context = this.getUIContext();
+        this.engine.setScope((task: () => void) => context.runScopedTask(task));
         this.engine.visible = this.visible;
         this.engine.resize(this.ctx.width, this.ctx.height);
         if (this.visible) this.engine.start();

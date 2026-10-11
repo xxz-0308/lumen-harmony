@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { emitFrame, resetSyncs, syncs } from './kit-display-sync';
+import { emitFrame, resetSyncs, setScopeCheck, syncs } from './kit-display-sync';
 
 Object.assign(globalThis, { ObservedV2: (value: unknown) => value, Trace: () => {} });
 const { Settings } = await import('../../entry/src/main/ets/app/Settings');
@@ -147,3 +147,20 @@ assert.equal(paint.shadowBlur,0);Settings.inst.danmakuSize=24;paintEngine.push('
 assert.equal(setters.font,3,'measurement applies the new font immediately');
 paintEngine.clear();paintEngine.push('after clear',0xffffff);emitFrame(3.04e9);assert.equal(setters.font,4);
 paintEngine.stop();console.log('Danmaku engine: stable paint setters submitted once over 240 frames; resize/style/font/clear invalidation and cleanup passed');
+
+resetSyncs();let scopeDepth=0;
+const frameTasks:(()=>void)[]=[];
+const scopedEngine=new DanmakuEngine({font:'',measureText:()=>({width:100}),clearRect(){},fillText(){assert.ok(scopeDepth>0);},strokeText(){assert.ok(scopeDepth>0);}} as never);
+scopedEngine.setScope(task=>{frameTasks.push(task);scopeDepth++;try{task();}finally{scopeDepth--;}});
+setScopeCheck(()=>scopeDepth>0);
+try{
+  scopedEngine.resize(960,540);scopedEngine.push('scoped fixture',0xffffff);
+  emitFrame(1e9);emitFrame(1.01e9);
+  const stableTask=(scopedEngine as unknown as {frameTask:()=>void}).frameTask;
+  assert.equal(frameTasks.filter(task=>task===stableTask).length,2,'frame callbacks reuse one scoped task instead of allocating a closure per frame');
+  scopedEngine.clear();emitFrame(1.02e9);
+  assert.ok(syncs.every(s=>!s.running&&s.callback===null),'idle stop and unsubscribe run in the same owning UI scope');
+  scopedEngine.push('resume scoped fixture',0xffffff);emitFrame(2e9);scopedEngine.stop();
+  assert.ok(syncs.every(s=>!s.running&&s.callback===null));
+}finally{setScopeCheck(null);}
+console.log('Danmaku engine: create/start/frame/idle-stop/unsubscribe retain the owning UI context with a stable frame task');
