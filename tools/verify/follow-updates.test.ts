@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { LiveRoomDetail } from '../../entry/src/main/ets/core/model/Models';
-import { setTestPreference } from './kit-prefs';
+import { getTestPreference, getTestPreferenceStats, resetTestPreferenceStats, setTestFlushHook, setTestPreference } from './kit-prefs';
 
 Object.assign(globalThis, { ObservedV2: (value: unknown) => value, Trace: () => {} });
 const { FollowStore } = await import('../../entry/src/main/ets/app/Stores');
@@ -52,4 +52,38 @@ const retired = progressive.items[0]; progressive.unfollow('huya', 'retired');
 const afterRemoval = progressive.contentRevision; resolve(detail('retired', 999)); await flush();
 assert.equal(progressive.contentRevision, afterRemoval, 'a late unfollowed result does not invalidate current content');
 assert.equal(retired.online, 0);
-console.log('FollowStore: content/status revisions, stable items, progressive refresh, throttle and forced follow-up passed');
+const name='lumen_follows';
+setTestPreference(name,'list',JSON.stringify([{siteId:'huya',roomId:'saved',userName:'fixture',avatar:'',addTime:1,tag:''}]));
+const saved=new FollowStore();saved.load({} as never);resetTestPreferenceStats(name);
+Sites.huya.getRoomDetail=async id=>detail(id,123);
+await saved.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:0,flush:0},'transient refresh does not serialize/write unchanged saved fields');
+saved.items[0].tag='fixture tag';saved.items[0].addTime=2;
+await saved.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:1,flush:1});
+assert.equal(JSON.parse(getTestPreference(name,'list')!)[0].tag,'fixture tag');
+const renamed=detail('saved');renamed.userName='renamed fixture';renamed.userAvatar='fixture-avatar';
+saved.updateFromDetail(renamed);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2});
+Sites.huya.getRoomDetail=async()=>renamed;await saved.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2});
+saved.unfollow('huya','saved');await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:3,flush:3});
+
+setTestPreference(name,'list','[]');const failed=new FollowStore();failed.load({} as never);resetTestPreferenceStats(name);
+setTestFlushHook(name,async()=>{throw new Error('fixture flush failure');});
+failed.follow(detail('retry'));await flush();assert.ok(failed.saveError.length>0);
+setTestFlushHook(name,null);Sites.huya.getRoomDetail=async id=>detail(id);
+await failed.refreshAll(true);await flush();assert.equal(failed.saveError,'');assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2},'failed snapshots remain retryable');
+await failed.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2});
+
+setTestPreference(name,'list','[]');const queued=new FollowStore();queued.load({} as never);resetTestPreferenceStats(name);
+let inFlight=0,flushPeak=0;const completions:(()=>void)[]=[];
+setTestFlushHook(name,()=>new Promise<void>(resolve=>{inFlight++;flushPeak=Math.max(flushPeak,inFlight);completions.push(()=>{inFlight--;resolve();});}));
+queued.follow(detail('old'));await flush();queued.follow(detail('new'));queued.unfollow('huya','old');queued.items[0].tag='latest edit';
+assert.deepEqual(getTestPreferenceStats(name),{putSync:1,flush:1},'edits do not mutate preference data during an older flush');
+completions.shift()!();await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2});
+assert.equal(flushPeak,1,'flush ownership is serial');
+assert.deepEqual(JSON.parse(getTestPreference(name,'list')!).map((f:any)=>[f.roomId,f.tag]),[['new','latest edit']]);
+completions.shift()!();await flush();setTestFlushHook(name,null);
+await queued.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceStats(name),{putSync:2,flush:2},'the newer successful snapshot is not dirtied by older completion');
+
+setTestPreference(name,'list','[]');const anchor=new FollowStore();anchor.load({} as never);resetTestPreferenceStats(name);
+anchor.followAnchor('huya','anchor','placeholder','',false);await flush();
+assert.equal(JSON.parse(getTestPreference(name,'list')!)[0].userName,'fixture','standalone detail changes are included in the subsequent saved snapshot');
+console.log('FollowStore: revisions, progressive refresh, throttle, unchanged/transient zero-write, persisted fields, failure retry, serial in-flight edits and standalone details passed');

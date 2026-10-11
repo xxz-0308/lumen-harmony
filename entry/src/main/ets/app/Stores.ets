@@ -103,6 +103,9 @@ export class FollowStore {
   private lastRefresh: number = 0;
   private refreshSeq: number = 0;
   private pendingRefresh: boolean = false;
+  private savedList: FollowData[] = [];
+  private saving: boolean = false;
+  private savePending: boolean = false;
   private listeners: Set<() => void> = new Set<() => void>();
 
   @Trace items: FollowItem[] = [];
@@ -158,6 +161,7 @@ export class FollowStore {
         out.push(f);
       }
       this.items = out;
+      this.savedList = this.snapshotData();
       this.storageError = '';
       this.notify(true);
     } catch (e) {
@@ -167,11 +171,8 @@ export class FollowStore {
     }
   }
 
-  private persist(): void {
-    if (this.prefs === null || this.storageError.length > 0) {
-      return;
-    }
-    const list: FollowData[] = this.items.map((f: FollowItem) => {
+  private snapshotData(): FollowData[] {
+    return this.items.map((f: FollowItem) => {
       const d = new FollowData();
       d.siteId = f.siteId;
       d.roomId = f.roomId;
@@ -181,17 +182,52 @@ export class FollowStore {
       d.tag = f.tag;
       return d;
     });
+  }
+
+  private matchesSaved(): boolean {
+    if (this.items.length !== this.savedList.length) return false;
+    for (let i = 0; i < this.items.length; i++) {
+      const f = this.items[i];
+      const d = this.savedList[i];
+      if (f.siteId !== d.siteId || f.roomId !== d.roomId || f.userName !== d.userName ||
+        f.avatar !== d.avatar || f.addTime !== d.addTime || f.tag !== d.tag) return false;
+    }
+    return true;
+  }
+
+  private persist(): void {
+    const prefs = this.prefs;
+    if (prefs === null || this.storageError.length > 0) return;
+    if (this.saving) {
+      this.savePending = true;
+      return;
+    }
+    // Compare fields without allocating/serializing an unchanged refresh snapshot.
+    if (this.saveError.length === 0 && this.matchesSaved()) return;
+    const list = this.snapshotData();
+    this.saving = true;
+    this.savePending = false;
     try {
-      this.prefs.putSync('list', JSON.stringify(list));
-      this.prefs.flush().then(() => {
+      prefs.putSync('list', JSON.stringify(list));
+      prefs.flush().then(() => {
+        if (this.prefs !== prefs) return;
+        this.savedList = list;
         this.saveError = '';
         this.notify();
       }).catch(() => {
+        if (this.prefs !== prefs) return;
         this.saveError = '关注保存失败，请重试';
         this.notify();
         Log.w('store', 'follow flush failed');
+      }).finally(() => {
+        this.saving = false;
+        if (this.savePending) {
+          this.savePending = false;
+          this.persist();
+        }
       });
     } catch (e) {
+      this.saving = false;
       this.saveError = '关注保存失败，请重试';
       this.notify();
       Log.e('follow', `save ${JSON.stringify(e)}`);
@@ -320,6 +356,7 @@ export class FollowStore {
     } finally {
       f.refreshing = false;
       this.notify(changed);
+      if (!this.refreshing) this.persist();
     }
   }
 
