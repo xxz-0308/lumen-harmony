@@ -8,8 +8,10 @@ import { LiveMessage, LiveMessageType } from '../../entry/src/main/ets/core/mode
 
 // Exercise the actual RoomModel with only transport/player dependencies replaced.
 const path = fileURLToPath(new URL('../../../entry/src/main/ets/room/RoomModel.ets', import.meta.url));
+const source = readFileSync(path, 'utf8');
+assert.equal(source.includes('\u0000'), false, 'ArkTS source uses escaped sentinels and remains a text file');
 const compiled = await build({
-  stdin: { contents: readFileSync(path, 'utf8').replace(/@(?:ObservedV2|Trace|Computed)\b/g, ''), resolveDir: dirname(path), loader: 'ts' },
+  stdin: { contents: source.replace(/@(?:ObservedV2|Trace|Computed)\b/g, ''), resolveDir: dirname(path), loader: 'ts' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
   plugins: [{ name: 'chat-history-dependencies', setup(b: any) {
     b.onResolve({ filter: /^\.\./ }, () => ({ path: 'dependencies', namespace: 'fixture' }));

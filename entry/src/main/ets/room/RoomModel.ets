@@ -555,11 +555,11 @@ export class RoomModel {
   /** Compiled block list; rebuilt only when the setting changes (this runs per message). */
   private blockPlain: string[] = [];
   private blockRegex: RegExp[] = [];
-  private blockSource: string = ' ';
+  private blockSource: string = '\u0000';
 
   private syncBlockWords(): void {
     const words = Settings.inst.blockWords;
-    const key = words.join('');
+    const key = words.join('\u0001');
     if (key === this.blockSource) {
       return;
     }
