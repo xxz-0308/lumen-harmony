@@ -9,7 +9,8 @@ import { BulletDelay, BULLET_LEAD_MS } from '../../entry/src/main/ets/danmaku/Bu
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
 async function logicStruct(file: string, name: string, end: string, mocks: Record<string, unknown>): Promise<any> {
   const src = readFileSync(new URL(file, import.meta.url), 'utf-8');
-  const marker = `export struct ${name} {`;
+  const exported = `export struct ${name} {`;
+  const marker = src.includes(exported) ? exported : `struct ${name} {`;
   const start = src.indexOf(marker) + marker.length;
   assert.ok(start >= marker.length);
   let body = src.slice(start, src.indexOf(end, start));
@@ -331,7 +332,19 @@ try {
   const host=new CanvasHost();host.visible=false;host.onVisible();
   assert.equal(canvasClears,1);assert.equal(canvasStops,1,'hiding parks display synchronization immediately');
   assert.equal(host.engine.visible,false);
-  console.log('Component tasks: lifecycle, intent, retained state, hidden chat, presentation-off intake, callback ownership and immediate Canvas parking passed');
+  const rootEnv={foreground:true};let rootRefreshes=0;
+  const rootFollows={lastRefreshAt:Date.now(),refreshAll:()=>{rootRefreshes++;rootFollows.lastRefreshAt=Date.now();}};
+  const Root=await logicStruct('../../../entry/src/main/ets/pages/Index.ets','Index','  private select(',{
+    Settings:{inst:{startPage:'home'}},AppEnv:{inst:rootEnv},FollowStore:{inst:rootFollows},hasHdsTabs:()=>false
+  });
+  const root=new Root();root.aboutToAppear();assert.equal(rootRefreshes,0,'fresh root does not start a redundant sweep');
+  root.rootShown=false;root.onRootActivity();clock.advance(10*60*1000);assert.equal(rootRefreshes,0,'covered root skips repeated periodic refresh');
+  rootFollows.lastRefreshAt=Date.now()-6*60*1000;root.rootShown=true;root.onRootActivity();assert.equal(rootRefreshes,1,'stale root reconciles once when visible');
+  root.onRootActivity();assert.equal(rootRefreshes,1);clock.advance(5*60*1000);assert.equal(rootRefreshes,2,'visible root retains the five-minute periodic cadence');
+  rootEnv.foreground=false;clock.advance(5*60*1000);assert.equal(rootRefreshes,2);
+  root.aboutToDisappear();rootEnv.foreground=true;rootFollows.lastRefreshAt=0;root.onRootActivity();clock.advance(5*60*1000);
+  assert.equal(rootRefreshes,2);assert.equal(clock.jobs.size,idleJobs,'root disposal prevents background task resurrection');
+  console.log('Component tasks: lifecycle, intent, hidden chat/root, presentation-off intake, callback ownership and immediate Canvas parking passed');
 } finally {
   Object.assign(globalThis,originalTimers);
 }

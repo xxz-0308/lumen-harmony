@@ -57,6 +57,8 @@ struct Index {
   private useHds: boolean = hasHdsTabs();
   private legacyHistoryPending: boolean = Settings.inst.startPage === 'history';
   private refreshTimer: number = -1;
+  private mounted: boolean = false;
+  private static readonly FOLLOW_REFRESH_MS: number = 5 * 60 * 1000;
 
   private restoreLegacyStart(): void {
     if (!this.legacyHistoryPending) return;
@@ -65,17 +67,26 @@ struct Index {
     Nav.openHistory();
   }
 
+  @Monitor('rootShown', 'env.foreground')
+  onRootActivity(): void {
+    if (!this.mounted || !this.rootShown || !this.env.foreground) return;
+    if (Date.now() - FollowStore.inst.lastRefreshAt >= Index.FOLLOW_REFRESH_MS) {
+      FollowStore.inst.refreshAll();
+    }
+  }
+
   aboutToAppear(): void {
-    // keep follow status fresh while the app is in the foreground
+    this.mounted = true;
+    this.onRootActivity();
     this.refreshTimer = setInterval(() => {
-      if (AppEnv.inst.foreground) {
-        FollowStore.inst.refreshAll();
-      }
-    }, 5 * 60 * 1000);
+      if (this.mounted && this.rootShown && this.env.foreground) FollowStore.inst.refreshAll();
+    }, Index.FOLLOW_REFRESH_MS);
   }
 
   aboutToDisappear(): void {
+    this.mounted = false;
     clearInterval(this.refreshTimer);
+    this.refreshTimer = -1;
   }
 
   private select(key: string): void {
