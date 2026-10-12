@@ -1,4 +1,5 @@
 import { AppEnv } from '../app/AppEnv';
+import { Settings } from '../app/Settings';
 import { C, Layout, Motion, Radius } from '../theme/Theme';
 import { DockMaterialModifier, loadDockMaterial } from '../platform/DockMaterial';
 
@@ -31,15 +32,24 @@ export struct BottomNav {
   @Local pressed: string = '';
   @Local focused: string = '';
   @Local env: AppEnv = AppEnv.inst;
+  @Local accentColor: string = C.accent;
   @Local materialStyle: DockMaterialModifier = new DockMaterialModifier(undefined);
   @Local legacyGlass: boolean = true;
   private materialGeneration: number = 0;
+  private syncTheme: () => void = () => {
+    this.accentColor = C.accent;
+  };
 
   aboutToAppear(): void {
+    Settings.inst.subscribeTheme(this.syncTheme);
+    this.env.subscribeDark(this.syncTheme);
+    this.syncTheme();
     this.syncMaterial();
   }
 
   aboutToDisappear(): void {
+    Settings.inst.unsubscribeTheme(this.syncTheme);
+    this.env.unsubscribeDark(this.syncTheme);
     this.materialGeneration++;
   }
 
@@ -88,15 +98,15 @@ export struct BottomNav {
             ForEach([this.selected === item.key], (on: boolean) => {
               SymbolGlyph(on ? item.selectedIcon : item.icon)
                 .fontSize(22)
-                .fontColor([on ? C.accent : C.text2])
+                .fontColor([on ? this.accentColor : C.text2])
                 .scale({ x: this.pressed === item.key && !this.env.reduceMotion ? 0.9 : 1,
                   y: this.pressed === item.key && !this.env.reduceMotion ? 0.9 : 1 })
                 .animation(this.env.reduceMotion ? { duration: 0 } : { curve: Motion.snappy })
-            }, (on: boolean) => `${item.key}_${on}`)
+            }, (on: boolean) => `${item.key}_${on}_${this.accentColor}`)
             Text(item.label)
               .fontSize(11)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.selected === item.key ? C.accent : C.text2)
+              .fontColor(this.selected === item.key ? this.accentColor : C.text2)
               .maxLines(1)
           }
           .width('100%')

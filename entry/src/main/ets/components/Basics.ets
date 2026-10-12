@@ -10,6 +10,8 @@ export struct NetImage {
   @Param radius: number = 0;
   @Param fit: ImageFit = ImageFit.Cover;
   @Param placeholder: ResourceColor = C.skeleton;
+  @Param decodeW: number = 0;
+  @Param decodeH: number = 0;
   @Local loaded: boolean = false;
   @Local pixel: image.PixelMap | null = null;
   @Local env: AppEnv = AppEnv.inst;
@@ -83,6 +85,7 @@ export struct NetImage {
           .width('100%')
           .height('100%')
           .objectFit(this.fit)
+          .sourceSize(this.decodeW > 0 && this.decodeH > 0 ? { width: this.decodeW, height: this.decodeH } : undefined)
           .draggable(false)
           .syncLoad(false)
           .opacity(this.loaded ? 1 : 0)
@@ -115,8 +118,8 @@ export struct Avatar {
   }
 
   build() {
-    Stack() {
-      if (this.live) {
+    if (this.live) {
+      Stack() {
         Row()
           .width(this.dim + this.ring * 4)
           .height(this.dim + this.ring * 4)
@@ -130,14 +133,18 @@ export struct Avatar {
           .onAppear(() => {
             this.pulse = true;
           })
+        NetImage({ src: this.src, radius: this.dim / 2, placeholder: C.surface3, decodeW: 72, decodeH: 72 })
+          .width(this.dim)
+          .height(this.dim)
       }
-      NetImage({ src: this.src, radius: this.dim / 2, placeholder: C.surface3 })
+      .width(this.dim + this.ring * 4)
+      .height(this.dim + this.ring * 4)
+      .onVisibleAreaChange([0], (visible: boolean) => { this.visible = visible; })
+    } else {
+      NetImage({ src: this.src, radius: this.dim / 2, placeholder: C.surface3, decodeW: 72, decodeH: 72 })
         .width(this.dim)
         .height(this.dim)
     }
-    .width(this.dim + (this.live ? this.ring * 4 : 0))
-    .height(this.dim + (this.live ? this.ring * 4 : 0))
-    .onVisibleAreaChange([0], (visible: boolean) => { this.visible = visible; })
   }
 }
 
@@ -276,10 +283,12 @@ export struct RoomCardSkeleton {
 export struct Segmented {
   @Param items: string[] = [];
   @Param selected: number = 0;
-  @Param segmentWidth: number = 64;
-  @Param barHeight: number = 48;
+  @Param segmentWidth: number = 68;
+  @Param barHeight: number = 42;
   /** Frosted track with a lit pill, for switchers that float over imagery (platform tabs). */
   @Param glass: boolean = false;
+  @Param pillColor: string = '';
+  @Param activeTextColor: string = '';
   @Event onSelect: (index: number) => void = () => {
   };
   @Local pressed: number = -1;
@@ -290,9 +299,7 @@ export struct Segmented {
         .width(this.segmentWidth - 6)
         .height(this.barHeight - 6)
         .borderRadius(Radius.pill)
-        .backgroundColor(this.glass ? C.glassPill : C.bgElevated)
-        .borderWidth(this.glass ? 0.5 : 0)
-        .borderColor(C.glassStroke)
+        .backgroundColor(this.pillColor.length > 0 ? this.pillColor : (this.glass ? C.glassPill : C.bgElevated))
         .shadow({ radius: this.glass ? 12 : 8, color: this.glass ? '#26000000' : '#1F000000', offsetY: 2 })
         .translate({ x: 3 + this.selected * this.segmentWidth })
         .animation({ curve: AppEnv.inst.reduceMotion ? Curve.Linear : Motion.snappy,
@@ -308,7 +315,7 @@ export struct Segmented {
             .padding(0)
             .fontSize(13)
             .fontWeight(i === this.selected ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(i === this.selected ? C.text1 : C.text2)
+            .fontColor(i === this.selected ? (this.activeTextColor.length > 0 ? this.activeTextColor : C.text1) : C.text2)
             .animation({ duration: 180, curve: Curve.EaseOut })
             .scale({ x: this.pressed === i && !AppEnv.inst.reduceMotion ? 0.96 : 1,
               y: this.pressed === i && !AppEnv.inst.reduceMotion ? 0.96 : 1 })
@@ -330,8 +337,6 @@ export struct Segmented {
     .borderRadius(Radius.pill)
     .backgroundColor(this.glass ? C.glassTint : C.surface2)
     .backgroundBlurStyle(this.glass ? BlurStyle.COMPONENT_THIN : BlurStyle.NONE)
-    .borderWidth(this.glass ? 0.5 : 0)
-    .borderColor(C.glassStroke)
   }
 }
 
@@ -343,6 +348,7 @@ export struct IconButton {
   @Param iconSize: number = 20;
   @Param glass: boolean = false;
   @Param tint: ResourceColor = C.text1;
+  @Param activeTint: ResourceColor = '';
   @Param active: boolean = false;
   @Param toggleState: boolean = false;
   @Param label: string = '';
@@ -358,10 +364,11 @@ export struct IconButton {
         ForEach([this.icon], (icon: Resource) => {
           SymbolGlyph(icon)
             .fontSize(this.iconSize)
-            .fontColor([this.active ? C.accent : (this.glass ? C.onMedia : this.tint)])
+            .fontColor([this.active ? (this.activeTint !== '' ? this.activeTint : C.accent) :
+              (this.glass ? C.onMedia : this.tint)])
             .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }))
               .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 180, curve: Curve.EaseOut }))
-        }, (icon: Resource) => `${icon.id}`)
+        }, (icon: Resource) => `${icon.id}_${this.active}`)
       }
     }
     .width(Math.max(44, this.dim))
@@ -372,14 +379,12 @@ export struct IconButton {
     .backgroundBlurStyle(this.glass ? BlurStyle.Thin : BlurStyle.NONE)
     .scale({ x: this.pressed && !AppEnv.inst.reduceMotion ? 0.96 : 1,
       y: this.pressed && !AppEnv.inst.reduceMotion ? 0.96 : 1 })
-    .animation({ curve: Motion.snappy })
     .accessibilityText(this.label)
     .accessibilitySelected(this.toggleState ? this.active : undefined)
     .onTouch((e: TouchEvent) => {
-      if (e.type === TouchType.Down) {
-        this.pressed = true;
-      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-        this.pressed = false;
+      if (e.type === TouchType.Down || e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.getUIContext().animateTo({ duration: AppEnv.inst.reduceMotion ? 0 : 150,
+          curve: Motion.snappy }, () => { this.pressed = e.type === TouchType.Down; });
       }
     })
     .onClick(() => this.onTap())
@@ -426,7 +431,7 @@ export struct StateView {
         Button(this.actionText)
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
-          .fontColor(Color.White)
+          .fontColor(C.onAccent)
           .backgroundColor(C.accent)
           .height(48)
           .padding({ left: 22, right: 22 })
@@ -480,8 +485,8 @@ export struct RefreshGlow {
       })
     }
     .width('100%')
-    .height(64)
+    .height(56)
+    .padding({ top: 18 })
     .justifyContent(FlexAlign.Center)
-    .visibility(this.refreshing ? Visibility.Visible : Visibility.Hidden)
   }
 }

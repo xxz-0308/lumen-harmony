@@ -34,12 +34,14 @@ export struct VideoLayer {
     this.model.player.firstFrame = false;
   }
 
-  @Monitor('model.player.noticeSeq')
+  @Monitor('model.player.notice', 'model.player.noticeSeq')
   onNotice(): void {
     this.noticeText = this.model.player.notice;
     if (this.noticeTimer >= 0) {
       clearTimeout(this.noticeTimer);
+      this.noticeTimer = -1;
     }
+    if (this.noticeText.length === 0) return;
     this.noticeTimer = setTimeout(() => {
       this.noticeText = '';
       this.noticeTimer = -1;
@@ -166,7 +168,7 @@ export struct VideoLayer {
             Text('重试')
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
-              .fontColor(Color.White)
+              .fontColor(C.onAccent)
               .height(44)
               .padding({ left: 22, right: 22 })
               .borderRadius(Radius.pill)

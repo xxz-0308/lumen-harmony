@@ -28,8 +28,9 @@ export struct Appear {
 }
 
 /**
- * Virtualized multi-column room list with pull-to-refresh, infinite scroll, skeletons and
- * an optional full-width header. Column count adapts to the available width.
+ * Virtualized multi-column room list with pull-to-refresh, infinite scroll, skeletons,
+ * an optional full-width header, and an optional `2-Up` featured lead row (`featuredLead = true`)
+ * that breaks the monotonous equal-card wall before flowing into the 3-column gallery.
  */
 @ComponentV2
 export struct RoomGrid {
@@ -41,7 +42,8 @@ export struct RoomGrid {
   @Param alignY: number = -1;
   @Param alignSeq: number = 0;
   @Param showSite: boolean = false;
-  @Param minCardWidth: number = 236;
+  @Param featuredLead: boolean = false;
+  @Param minCardWidth: number = 320;
   @Param topPadding: number = 0;
   /** Home owns the shared scrolling header and pull-to-refresh above its bounded lists. */
   @Param nested: boolean = false;
@@ -88,7 +90,16 @@ export struct RoomGrid {
 
   get columns(): number {
     const w = this.areaW > 0 ? this.areaW : AppEnv.inst.winWidth;
-    return Layout.columns(w - this.inset - Space.page - this.rightInset, this.minCardWidth, Space.lg);
+    return Layout.columns(w - this.inset - Space.page - this.rightInset, this.minCardWidth, Space.xl);
+  }
+
+  get hasFeaturedPair(): boolean {
+    return this.featuredLead && this.columns >= 3 && this.feed.items.length >= 2;
+  }
+
+  @Computed
+  get gridItems(): LiveRoomItem[] {
+    return this.hasFeaturedPair ? this.feed.items.slice(2) : this.feed.items;
   }
 
   scrollToTop(): void {
@@ -116,9 +127,36 @@ export struct RoomGrid {
 
   @Builder
   headerWrap() {
-    Column() { this.header() }
-      .width('100%')
-      .padding({ top: this.topPadding })
+    Column({ space: Space.xl }) {
+      this.header()
+      if (this.hasFeaturedPair) {
+        Row({ space: Space.xl }) {
+          Column() {
+            RoomCard({
+              item: this.feed.items[0],
+              scope: `${this.scope}_lead0`,
+              showSite: this.showSite,
+              featured: true
+            })
+          }
+          .layoutWeight(1)
+
+          Column() {
+            RoomCard({
+              item: this.feed.items[1],
+              scope: `${this.scope}_lead1`,
+              showSite: this.showSite,
+              featured: true
+            })
+          }
+          .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ bottom: Space.md })
+      }
+    }
+    .width('100%')
+    .padding({ top: this.topPadding })
   }
 
   @Builder
@@ -126,7 +164,7 @@ export struct RoomGrid {
     List({ scroller: this.scroller, space: Space.xl }) {
       ListItemGroup({ header: this.headerWrap(), footer: this.footer(), space: Space.xl }) {
         if (this.feed.initialLoading && this.feed.items.length === 0) {
-          ForEach([0, 1, 2, 3, 4, 5, 6, 7], (i: number) => {
+          ForEach([0, 1, 2, 3, 4, 5], (i: number) => {
             ListItem() { RoomCardSkeleton() }
           }, (i: number) => `sk_${i}`)
         } else if (this.feed.items.length === 0) {
@@ -142,7 +180,7 @@ export struct RoomGrid {
               .width('100%')
           }
         } else {
-          Repeat<LiveRoomItem>(this.feed.items)
+          Repeat<LiveRoomItem>(this.gridItems)
             .each((ri: RepeatItem<LiveRoomItem>) => {
               ListItem() {
                 if (this.scope.startsWith('home_')) {
@@ -160,16 +198,16 @@ export struct RoomGrid {
         }
       }
     }
-    .lanes(this.feed.items.length === 0 && !this.feed.initialLoading ? 1 : this.columns, Space.lg)
+    .lanes(this.feed.items.length === 0 && !this.feed.initialLoading ? 1 : this.columns, Space.xl)
     .width('100%')
     .height('100%')
     .padding({ left: Space.page + this.inset, right: this.rightInset })
     .contentEndOffset(this.bottomInset)
     .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .edgeEffect(EdgeEffect.None)
     .cachedCount(6)
     .onScrollIndex((start: number, end: number) => {
-      if (this.active && end >= this.feed.items.length - this.columns * 3) this.feed.loadMore();
+      if (this.active && end >= this.gridItems.length - this.columns * 3) this.feed.loadMore();
     })
     .onReachEnd(() => {
       if (this.active) this.feed.loadMore();
@@ -186,11 +224,12 @@ export struct RoomGrid {
     if (this.externalRefresh) {
       this.gridList()
     } else {
-      Refresh({ refreshing: this.feed.refreshing, builder: this.refreshIndicator() }) {
+      Refresh({ refreshing: $$this.feed.refreshing, builder: this.refreshIndicator() }) {
         this.gridList()
       }
       .onRefreshing(() => this.feed.load(true))
-      .refreshOffset(64)
+      .refreshOffset(56)
+      .pullDownRatio(0.85)
     }
   }
 

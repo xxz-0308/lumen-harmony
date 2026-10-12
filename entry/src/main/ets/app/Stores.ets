@@ -47,6 +47,8 @@ export class FollowItem {
   @Trace area: string = '';
   @Trace startTime: number = 0;
   @Trace refreshing: boolean = false;
+  detailVersion: number = 0;
+  private cachedRoom: LiveRoomItem | null = null;
 
   get key(): string {
     return `${this.siteId}_${this.roomId}`;
@@ -56,10 +58,43 @@ export class FollowItem {
     return this.state === LiveState.Live;
   }
 
+  /** Request epochs also change for identical responses; UI identity only changes with content. */
+  get renderKey(): string {
+    return JSON.stringify([this.siteId, this.roomId, this.userName, this.avatar, this.tag,
+      this.state, this.title, this.cover, this.online, this.area, this.startTime, this.refreshing]);
+  }
+
+  /** Detached presentation data: retained pages must not observe live store mutations. */
+  snapshot(): FollowItem {
+    const f = new FollowItem();
+    f.siteId = this.siteId;
+    f.roomId = this.roomId;
+    f.addTime = this.addTime;
+    f.userName = this.userName;
+    f.avatar = this.avatar;
+    f.tag = this.tag;
+    f.state = this.state;
+    f.title = this.title;
+    f.cover = this.cover;
+    f.online = this.online;
+    f.area = this.area;
+    f.startTime = this.startTime;
+    f.refreshing = this.refreshing;
+    f.detailVersion = this.detailVersion;
+    return f;
+  }
+
   toRoomItem(): LiveRoomItem {
+    const c = this.cachedRoom;
+    if (c !== null && c.siteId === this.siteId && c.roomId === this.roomId &&
+      c.title === this.title && c.cover === this.cover && c.userName === this.userName &&
+      c.online === this.online && c.avatar === this.avatar && c.area === this.area) {
+      return c;
+    }
     const r = LiveRoomItem.of(this.siteId, this.roomId, this.title, this.cover, this.userName, this.online);
     r.avatar = this.avatar;
     r.area = this.area;
+    this.cachedRoom = r;
     return r;
   }
 }
@@ -74,15 +109,23 @@ export class HistoryItem {
   @Trace cover: string = '';
   @Trace area: string = '';
   @Trace watchedAt: number = 0;
+  private cachedRoom: LiveRoomItem | null = null;
 
   get key(): string {
     return `${this.siteId}_${this.roomId}`;
   }
 
   toRoomItem(): LiveRoomItem {
+    const c = this.cachedRoom;
+    if (c !== null && c.siteId === this.siteId && c.roomId === this.roomId &&
+      c.title === this.title && c.cover === this.cover && c.userName === this.userName &&
+      c.avatar === this.avatar && c.area === this.area) {
+      return c;
+    }
     const r = LiveRoomItem.of(this.siteId, this.roomId, this.title, this.cover, this.userName, 0);
     r.avatar = this.avatar;
     r.area = this.area;
+    this.cachedRoom = r;
     return r;
   }
 }
@@ -316,6 +359,7 @@ export class FollowStore {
     if (d.userAvatar.length > 0) {
       f.avatar = d.userAvatar;
     }
+    f.detailVersion++;
     return changed;
   }
 
@@ -340,13 +384,15 @@ export class FollowStore {
 
   private async refreshOne(f: FollowItem): Promise<void> {
     f.refreshing = true;
+    this.notify(true);
     let changed = false;
+    const version = f.detailVersion;
     try {
       const d = await Sites.of(f.siteId).getRoomDetail(f.roomId);
-      // An unfollowed item may still have a shared request in flight.
-      if (this.find(f.siteId, f.roomId) !== f) return;
+      // An unfollowed item or one updated concurrently by a room page must not be overwritten.
+      if (this.find(f.siteId, f.roomId) !== f || f.detailVersion !== version) return;
       changed = FollowStore.applyDetail(f, d);
-      if (f.userName !== d.userName) {
+      if (f.userName !== d.userName && d.userName.length > 0) {
         changed = true;
         f.userName = d.userName;
       }
@@ -355,7 +401,7 @@ export class FollowStore {
       Log.w('follow', `refresh ${f.key} failed: ${e}`);
     } finally {
       f.refreshing = false;
-      this.notify(changed);
+      this.notify(changed || this.find(f.siteId, f.roomId) === f);
       if (!this.refreshing) this.persist();
     }
   }
@@ -379,11 +425,22 @@ export class FollowStore {
     this.notify();
     const seq = ++this.refreshSeq;
     const queue = this.items.slice();
+    const fetched: Array<[FollowItem, LiveRoomDetail, number]> = [];
+    let failures = 0;
     const worker = async (): Promise<void> => {
       while (queue.length > 0 && seq === this.refreshSeq) {
         const f = queue.shift();
         if (f !== undefined) {
-          await this.refreshOne(f);
+          const version = f.detailVersion;
+          try {
+            const d = await Sites.of(f.siteId).getRoomDetail(f.roomId);
+            if (seq === this.refreshSeq && this.find(f.siteId, f.roomId) === f && f.detailVersion === version) {
+              fetched.push([f, d, version]);
+            }
+          } catch (e) {
+            failures++;
+            Log.w('follow', `refresh ${f.key} failed: ${e}`);
+          }
         }
       }
     };
@@ -393,13 +450,28 @@ export class FollowStore {
     }
     await Promise.all(workers);
     if (seq === this.refreshSeq) {
+      for (const entry of fetched) {
+        const f = entry[0];
+        const d = entry[1];
+        const version = entry[2];
+        if (this.find(f.siteId, f.roomId) !== f || f.detailVersion !== version) continue;
+        let changed = FollowStore.applyDetail(f, d);
+        if (f.userName !== d.userName && d.userName.length > 0) {
+          f.userName = d.userName;
+          changed = true;
+        }
+        if (changed) {
+          this.contentRevision++;
+        }
+      }
+      this.refreshFailures = failures;
       this.refreshing = false;
       this.lastRefreshAt = Date.now();
       // Partial failures should not suppress the next automatic check for a whole minute.
       if (this.refreshFailures > 0) {
         this.lastRefresh = Date.now() - 45000;
       }
-      this.notify();
+      this.notify(false);
       this.persist();
       if (this.pendingRefresh) {
         this.pendingRefresh = false;
@@ -414,6 +486,8 @@ export class HistoryStore {
   static readonly inst: HistoryStore = new HistoryStore();
   private prefs: preferences.Preferences | null = null;
   private listeners: Set<() => void> = new Set<() => void>();
+  private flushing: boolean = false;
+  private flushPending: boolean = false;
 
   @Trace items: HistoryItem[] = [];
   @Trace storageError: string = '';
@@ -481,7 +555,8 @@ export class HistoryStore {
   }
 
   private persist(): void {
-    if (this.prefs === null || this.storageError.length > 0) {
+    const prefs = this.prefs;
+    if (prefs === null || this.storageError.length > 0) {
       return;
     }
     const list: HistoryData[] = this.items.map((h: HistoryItem) => {
@@ -497,16 +572,33 @@ export class HistoryStore {
       return d;
     });
     try {
-      this.prefs.putSync('list', JSON.stringify(list));
-      this.prefs.flush().then(() => {
-        this.saveError = '';
-        this.notify();
+      prefs.putSync('list', JSON.stringify(list));
+      if (this.flushing) {
+        this.flushPending = true;
+        return;
+      }
+      this.flushing = true;
+      this.flushPending = false;
+      prefs.flush().then(() => {
+        if (this.prefs !== prefs) return;
+        if (this.saveError.length > 0) {
+          this.saveError = '';
+          this.notify();
+        }
       }).catch(() => {
+        if (this.prefs !== prefs) return;
         this.saveError = '历史记录保存失败，请重试';
         this.notify();
         Log.w('store', 'history flush failed');
+      }).finally(() => {
+        this.flushing = false;
+        if (this.flushPending && this.prefs === prefs) {
+          this.flushPending = false;
+          this.persist();
+        }
       });
     } catch (e) {
+      this.flushing = false;
       this.saveError = '历史记录保存失败，请重试';
       this.notify();
       Log.e('history', `save ${JSON.stringify(e)}`);

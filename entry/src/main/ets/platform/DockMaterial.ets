@@ -16,7 +16,7 @@ export async function loadDockMaterial(reduceMotion: boolean): Promise<SystemUiM
       colorInvert: false,
       applyShadow: true,
       interactive: false,
-      lightEffect: reduceMotion ? null : { color: Color.White }
+      lightEffect: reduceMotion ? null : { color: C.navLight }
     });
   } catch (e) {
     // Material is progressive enhancement; navigation must remain available.

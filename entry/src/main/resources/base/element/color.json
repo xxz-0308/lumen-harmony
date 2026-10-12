@@ -6,7 +6,7 @@
     },
     {
       "name": "bg",
-      "value": "#F4F4F6"
+      "value": "#F5F5F7"
     },
     {
       "name": "bg_elevated",
@@ -18,59 +18,59 @@
     },
     {
       "name": "surface_2",
-      "value": "#EDEDF1"
+      "value": "#EBEBF0"
     },
     {
       "name": "surface_3",
-      "value": "#E3E3E9"
+      "value": "#E0E0E6"
     },
     {
       "name": "stroke",
-      "value": "#14000000"
+      "value": "#0F000000"
     },
     {
       "name": "stroke_strong",
-      "value": "#26000000"
+      "value": "#1F000000"
     },
     {
       "name": "text_primary",
-      "value": "#111114"
+      "value": "#1D1D1F"
     },
     {
       "name": "text_secondary",
-      "value": "#9E111114"
+      "value": "#991D1D1F"
     },
     {
       "name": "text_tertiary",
-      "value": "#99111114"
+      "value": "#591D1D1F"
     },
     {
       "name": "glass_tint",
-      "value": "#A6FFFFFF"
+      "value": "#CCECEEF2"
     },
     {
       "name": "glass_stroke",
-      "value": "#1A000000"
+      "value": "#12000000"
     },
     {
       "name": "skeleton",
-      "value": "#E7E7EC"
+      "value": "#E5E5EA"
     },
     {
       "name": "skeleton_hi",
-      "value": "#F4F4F7"
+      "value": "#F2F2F7"
     },
     {
       "name": "accent",
-      "value": "#F0542E"
+      "value": "#1D1D1F"
     },
     {
       "name": "accent_soft",
-      "value": "#1FF0542E"
+      "value": "#121D1D1F"
     },
     {
       "name": "live",
-      "value": "#FF3355"
+      "value": "#FF3B30"
     },
     {
       "name": "scrim",
@@ -78,11 +78,11 @@
     },
     {
       "name": "hero_fade",
-      "value": "#F4F4F6"
+      "value": "#F5F5F7"
     },
     {
       "name": "glass_pill",
-      "value": "#E6FFFFFF"
+      "value": "#F2FFFFFF"
     }
   ]
 }

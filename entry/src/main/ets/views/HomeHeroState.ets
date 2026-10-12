@@ -18,7 +18,7 @@ export class HomeHeroState {
   @Trace index: number = 0;
   @Trace touched: boolean = false;
   @Trace fromFollows: boolean = false;
-  @Trace generation: number = 0;
+  generation: number = 0;
   private active: boolean = false;
   private pending: LiveRoomItem[] = [];
   private pendingFollows: boolean = false;
@@ -68,22 +68,21 @@ export class HomeHeroState {
     this.reconcile();
   }
 
-  select(index: number, generation: number): void {
+  select(index: number, generation: number = this.generation): void {
     if (!this.accepts(index, generation)) return;
     this.index = index;
   }
 
-  transition(index: number, position: number, generation: number): void {
+  transition(index: number, position: number, generation: number = this.generation): void {
     if (!this.accepts(index, generation)) return;
     const p = Math.max(-1, Math.min(1, position));
     this.slides[index].opacity = 1 - Math.abs(p) * 0.7;
     this.slides[index].shift = p;
   }
 
-  finish(index: number, generation: number): void {
+  finish(index: number, generation: number = this.generation): void {
     if (!this.accepts(index, generation)) return;
     this.index = index;
-    // No timed-out proxy may leave the selected slide dimmed or shifted at rest.
     this.generation++;
     this.resetStyles();
   }

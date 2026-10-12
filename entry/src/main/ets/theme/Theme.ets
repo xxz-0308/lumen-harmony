@@ -20,43 +20,61 @@ export class C {
   /** The lit selection pill inside a glass segmented control. */
   static readonly glassPill: Resource = $r('app.color.glass_pill');
   /** Translucent tint keeps the dock's backdrop visible on the API 24 glass path. */
-  static get navSurface(): string { return AppEnv.inst.isDark ? '#661A1A22' : '#66FFFFFF'; }
-  static get navStroke(): string { return AppEnv.inst.isDark ? '#24FFFFFF' : '#66FFFFFF'; }
+  static get navSurface(): string { return AppEnv.inst.isDark ? '#6614141A' : '#66FFFFFF'; }
+  static get navStroke(): string { return AppEnv.inst.isDark ? '#1FFFFFFF' : '#66FFFFFF'; }
   static get navHighlight(): string { return AppEnv.inst.isDark ? '#33FFFFFF' : '#99FFFFFF'; }
   static get navShadow(): string { return AppEnv.inst.isDark ? '#26000000' : '#14000000'; }
   static readonly skeleton: Resource = $r('app.color.skeleton');
   static readonly skeletonHi: Resource = $r('app.color.skeleton_hi');
-  static get accent(): Resource | string {
+
+  static get accent(): string {
     const mode = Settings.inst.accentPalette;
     if (mode === 'ocean') return AppEnv.inst.isDark ? '#78B9FF' : '#327DCE';
     if (mode === 'mint') return AppEnv.inst.isDark ? '#73D9B6' : '#147D67';
     if (mode === 'orchid') return AppEnv.inst.isDark ? '#CF9CFF' : '#8E4FC2';
-    return $r('app.color.accent');
+    return AppEnv.inst.isDark ? '#F5F5F7' : '#1D1D1F';
   }
-  static get accentSoft(): Resource | string {
+
+  /** High-contrast foreground text placed directly on top of a solid `C.accent` pill button. */
+  static get onAccent(): string {
+    return AppEnv.inst.isDark ? '#08080A' : '#FFFFFF';
+  }
+
+  static get accentSoft(): string {
     const mode = Settings.inst.accentPalette;
     if (mode === 'ocean') return AppEnv.inst.isDark ? '#253C59' : '#E4F1FF';
     if (mode === 'mint') return AppEnv.inst.isDark ? '#1E473D' : '#D9F7EC';
     if (mode === 'orchid') return AppEnv.inst.isDark ? '#453358' : '#F3E4FF';
-    return $r('app.color.accent_soft');
+    return AppEnv.inst.isDark ? '#26FFFFFF' : '#14000000';
   }
-  static get accentHighlight(): Resource | string {
+
+  static get accentHighlight(): string {
     const mode = Settings.inst.accentPalette;
-    if (mode === 'ocean') return '#5AA9F5';
-    if (mode === 'mint') return '#36AC8A';
-    if (mode === 'orchid') return '#B579E0';
-    return '#FF8A4C';
+    if (mode === 'ocean') return AppEnv.inst.isDark ? '#5AA9F5' : '#327DCE';
+    if (mode === 'mint') return AppEnv.inst.isDark ? '#36AC8A' : '#147D67';
+    if (mode === 'orchid') return AppEnv.inst.isDark ? '#B579E0' : '#8E4FC2';
+    return AppEnv.inst.isDark ? '#FFFFFF' : '#1D1D1F';
   }
+
+  /** Optical point-light color for the HDS floating glass navigation bar: white in Dark Mode, soft silver-grey in Light Mode. */
+  static get navLight(): string {
+    return AppEnv.inst.isDark ? '#FFFFFF' : '#8E95A3';
+  }
+
   static get accentGlow(): string {
     const mode = Settings.inst.accentPalette;
-    if (mode === 'ocean') return '#66327DCE';
-    if (mode === 'mint') return '#66147D67';
-    if (mode === 'orchid') return '#668E4FC2';
-    return '#66FF6B45';
+    if (mode === 'ocean') return '#4D327DCE';
+    if (mode === 'mint') return '#4D147D67';
+    if (mode === 'orchid') return '#4D8E4FC2';
+    return AppEnv.inst.isDark ? '#2EFFFFFF' : '#1F000000';
   }
+
   static readonly live: Resource = $r('app.color.live');
   static readonly scrim: Resource = $r('app.color.scrim');
   static readonly heroFade: Resource = $r('app.color.hero_fade');
+  static get shadow(): string {
+    return AppEnv.inst.isDark ? '#4D000000' : '#14000000';
+  }
   /** Always-light text over video/cover imagery. */
   static readonly onMedia: string = '#FFFFFF';
   static readonly onMedia2: string = '#CCFFFFFF';
@@ -68,24 +86,24 @@ export class Space {
   static readonly xs: number = 8;
   static readonly sm: number = 12;
   static readonly md: number = 16;
-  static readonly lg: number = 20;
-  static readonly xl: number = 24;
-  static readonly xxl: number = 32;
-  static readonly page: number = 28;
+  static readonly lg: number = 22;
+  static readonly xl: number = 28;
+  static readonly xxl: number = 36;
+  static readonly page: number = 36;
 }
 
 export class Radius {
   static readonly xs: number = 6;
   static readonly sm: number = 10;
   static readonly md: number = 14;
-  static readonly lg: number = 18;
-  static readonly xl: number = 24;
+  static readonly lg: number = 20;
+  static readonly xl: number = 26;
   static readonly pill: number = 999;
 }
 
 export class Font {
-  static readonly display: number = 34;
-  static readonly title1: number = 26;
+  static readonly display: number = 36;
+  static readonly title1: number = 28;
   static readonly title2: number = 20;
   static readonly headline: number = 17;
   static readonly body: number = 15;

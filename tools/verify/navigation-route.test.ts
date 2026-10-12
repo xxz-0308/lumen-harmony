@@ -15,14 +15,20 @@ class FakeNavPathStack {
   }
   pop(): void { this.paths.pop(); }
 }
-Object.assign(globalThis, { NavPathStack: FakeNavPathStack, LaunchMode: { NEW_INSTANCE: 1 } });
+Object.assign(globalThis, { NavPathStack: FakeNavPathStack, LaunchMode: { NEW_INSTANCE: 1 },
+  ObservedV2: (value: unknown) => value, Trace: () => {} });
 const { Nav, LiveRouteParam } = await import('../../entry/src/main/ets/app/Nav');
+const { NavigationActivity } = await import('../../entry/src/main/ets/app/NavigationActivity');
+const activity = NavigationActivity.inst;
 const stack = Nav.stack as unknown as FakeNavPathStack;
 const item = new LiveRoomItem();
 item.siteId = 'huya';
 item.roomId = '691406';
 item.cover = 'https://example.test/cover.jpg';
 Nav.openLive(item, [20, 30, 300, 169]);
+assert.equal(activity.rootActive, false, 'root freezes before destination readiness can write follow details');
+activity.setRootVisible(true, true);
+assert.equal(activity.rootActive, false, 'a transparent destination reporting the nav bar visible cannot wake root content');
 let route = stack.paths.at(-1)!.param as InstanceType<typeof LiveRouteParam>;
 assert.equal(route.preview, item);
 assert.equal(route.siteId, item.siteId);
@@ -42,4 +48,17 @@ for (const rect of [[], [20, 30, 300], [20, 30, 0, 169], [20, 30, 300, 0]]) {
   assert.equal(route.coverW, -1, 'invalid card bounds retain the fade-only fallback');
   Nav.back();
 }
-console.log('Navigation routes: card bounds, preview, direct-entry fallback and replacement preserved');
+activity.holdRoot();
+activity.setRootVisible(true);
+assert.equal(activity.rootActive, false, 'root visibility during pop must not resume list rebuilding during animation');
+activity.holdRoot();
+activity.releaseRoot();
+assert.equal(activity.rootActive, false, 'another retiring destination still holds presentation');
+activity.releaseRoot();
+assert.equal(activity.rootActive, true);
+activity.setRootVisible(false);
+activity.holdRoot();
+activity.releaseRoot();
+assert.equal(activity.rootActive, false, 'popping into a secondary page must not wake the root');
+activity.setRootVisible(true);
+console.log('Navigation routes: card bounds, preview, direct-entry fallback, replacement and retained-root freeze preserved');

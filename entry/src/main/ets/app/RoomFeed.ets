@@ -43,6 +43,30 @@ export class RoomFeed {
     return this.items.length === 0;
   }
 
+  /** Seeds page 1 from an already-fetched current-query result so loadMore() continues from page 2. */
+  seedFirstPage(items: LiveRoomItem[], hasMore: boolean): void {
+    this.seq++;
+    this.keys.clear();
+    const fresh: LiveRoomItem[] = [];
+    for (const it of items) {
+      const k = `${it.siteId}_${it.roomId}`;
+      if (!this.keys.has(k)) {
+        this.keys.add(k);
+        fresh.push(it);
+      }
+    }
+    this.items = fresh;
+    this.page = 1;
+    this.failedPage = 0;
+    this.hasMore = hasMore && fresh.length > 0;
+    this.initialLoading = false;
+    this.refreshing = false;
+    this.loadingMore = false;
+    this.error = '';
+    this.pageError = '';
+    this.generation++;
+  }
+
   async load(pull: boolean = false): Promise<void> {
     const seq = ++this.seq;
     if (pull) {
@@ -68,11 +92,14 @@ export class RoomFeed {
           fresh.push(it);
         }
       }
+      const hadItems = this.items.length > 0;
       this.items = fresh;
       this.page = 1;
       this.failedPage = 0;
       this.hasMore = res.hasMore && fresh.length > 0;
-      this.generation++;
+      if (!pull || !hadItems) {
+        this.generation++;
+      }
     } catch (e) {
       if (seq === this.seq) {
         const msg = RoomFeed.describe(e);

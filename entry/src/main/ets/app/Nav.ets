@@ -1,5 +1,6 @@
 import { LiveRoomItem, LiveSubCategory, SiteId } from '../core/model/Models';
 import { RetainedRoomPlayback } from './RetainedRoomPlayback';
+import { NavigationActivity } from './NavigationActivity';
 
 export class Routes {
   static readonly live: string = 'live';
@@ -54,6 +55,7 @@ export class Nav {
   }
 
   private static pushLive(p: LiveRouteParam): void {
+    NavigationActivity.inst.setRootVisible(false);
     RetainedRoomPlayback.close();
     const top = Nav.stack.getAllPathName();
     // switching rooms from inside a room replaces instead of stacking rooms
@@ -66,6 +68,7 @@ export class Nav {
   }
 
   static openCategory(c: LiveSubCategory): void {
+    NavigationActivity.inst.setRootVisible(false);
     const p = new CategoryRouteParam();
     p.category = c;
     Nav.stack.pushPath({ name: Routes.categoryRooms, param: p });
@@ -74,6 +77,7 @@ export class Nav {
   private static openSection(name: string): void {
     const paths = Nav.stack.getAllPathName();
     if (paths.length > 0 && paths[paths.length - 1] === name) return;
+    NavigationActivity.inst.setRootVisible(false);
     Nav.stack.pushPath({ name: name });
   }
 

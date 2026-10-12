@@ -84,6 +84,20 @@ export class RoomModel {
   private disposed: boolean = false;
   private playSeq: number = 0;
   private relay: DouyuStreamRelay | null = null;
+  /** Target preparation has its own lifetime; old playback/chat stay live until commit. */
+  private switchRequest: number = 0;
+  private pendingSwitchRelay: DouyuStreamRelay | null = null;
+  private switchNotice: string = '';
+
+  private cancelPendingSwitch(): void {
+    this.switchRequest++;
+    this.pendingSwitchRelay?.dispose();
+    this.pendingSwitchRelay = null;
+    if (this.switchNotice.length > 0 && this.player.notice === this.switchNotice) {
+      this.player.notice = '';
+    }
+    this.switchNotice = '';
+  }
 
   constructor() {
     // A transient failure (quality change, refresh) must not leave an error overlay
@@ -265,6 +279,7 @@ export class RoomModel {
     if (this.disposed) {
       return;
     }
+    this.cancelPendingSwitch();
     // Relayed Douyu signatures are single-use: reconnecting the paused relay path reaches a
     // CDN that drops the second connection, so resuming always signs a fresh URL.
     const singleUse = this.relay !== null;
@@ -330,7 +345,8 @@ export class RoomModel {
     return FollowStore.inst.isFollowed(this.siteId, this.detail?.roomId ?? this.roomId);
   }
 
-  async open(siteId: SiteId, roomId: string, preview: LiveRoomItem | null): Promise<void> {
+  /** Retires the current room only after a caller has decided to commit it. */
+  private resetRoom(siteId: SiteId, roomId: string, preview: LiveRoomItem | null): number {
     const seq = ++this.seq;
     this.playSeq++;
     this.relay?.dispose();
@@ -364,6 +380,13 @@ export class RoomModel {
     this.latestSc = null;
     this.online = preview?.online ?? 0;
     this.player.autoSwitch = Settings.inst.autoSwitchLine;
+    return seq;
+  }
+
+  async open(siteId: SiteId, roomId: string, preview: LiveRoomItem | null): Promise<void> {
+    if (this.disposed) return;
+    this.cancelPendingSwitch();
+    const seq = this.resetRoom(siteId, roomId, preview);
     try {
       const d = await this.site.getRoomDetail(roomId);
       if (seq !== this.seq) {
@@ -442,11 +465,21 @@ export class RoomModel {
       if (this.relay === null) {
         this.relay = new DouyuStreamRelay();
       }
-      urls.urls = await this.relay.register(upstreamUrls, urls.headers);
-      if (seq !== this.seq || request !== this.playSeq) {
+      const relay = this.relay;
+      urls.urls = await relay.register(upstreamUrls, urls.headers);
+      if (this.disposed || seq !== this.seq || request !== this.playSeq || relay !== this.relay) {
         return;
       }
     }
+    await this.commitPlayUrls(index, seq, request, urls, upstreamUrls, urlsRequestedAt,
+      line, seamless, nextLine, !seamless || this.player.wantsPlayback);
+  }
+
+  /** Shared source commit for current-room quality changes and already-prepared room switches. */
+  private async commitPlayUrls(index: number, seq: number, request: number, urls: PlayUrls,
+    upstreamUrls: string[], requestedAt: number, line: number, seamless: boolean,
+    nextLine: boolean, play: boolean): Promise<void> {
+    if (this.disposed || seq !== this.seq || request !== this.playSeq) return;
     if (urls.urls.length === 0) {
       throw new Error('没有可用的播放线路');
     }
@@ -458,13 +491,15 @@ export class RoomModel {
     const start = nextLine && urls.urls.length > 1 ? (line + 1) % urls.urls.length :
       Math.min(line, urls.urls.length - 1);
     // Seamless refreshes (expiry, recovery) must not un-pause a stream the user paused meanwhile.
-    await this.player.open(urls.urls, urls.headers, start, seamless, !seamless || this.player.wantsPlayback);
-    if (seq === this.seq && request === this.playSeq) {
-      this.scheduleExpiryRefresh(upstreamUrls, seq, urlsRequestedAt);
+    await this.player.open(urls.urls, urls.headers, start, seamless, play);
+    if (!this.disposed && seq === this.seq && request === this.playSeq) {
+      this.scheduleExpiryRefresh(upstreamUrls, seq, requestedAt);
     }
   }
 
   async selectQuality(index: number): Promise<void> {
+    if (this.disposed) return;
+    this.cancelPendingSwitch();
     if (index === this.qualityIndex && this.lines.length > 0) {
       return;
     }
@@ -486,11 +521,15 @@ export class RoomModel {
   }
 
   selectLine(index: number): void {
+    if (this.disposed) return;
+    this.cancelPendingSwitch();
     this.player.selectLine(index);
   }
 
   /** Re-resolves URLs (they expire) and restarts playback on the current quality. */
   async refresh(): Promise<void> {
+    if (this.disposed) return;
+    this.cancelPendingSwitch();
     if (this.detail === null || this.qualities.length === 0) {
       await this.open(this.siteId, this.roomId, this.preview);
       return;
@@ -513,11 +552,83 @@ export class RoomModel {
   }
 
   async switchTo(siteId: SiteId, roomId: string, preview: LiveRoomItem | null): Promise<void> {
-    if (siteId === this.siteId && roomId === this.roomId) {
-      return;
+    if (this.disposed) return;
+    // Selecting the still-current room also cancels a different target being prepared.
+    this.cancelPendingSwitch();
+    if (siteId === this.siteId && roomId === this.roomId) return;
+    const request = this.switchRequest;
+    const current = this.seq;
+    const site = Sites.of(siteId);
+    this.switchNotice = '正在准备直播源，继续当前播放';
+    this.player.notice = this.switchNotice;
+    this.player.noticeSeq++;
+    let committedSeq = -1;
+    let committedRequest = -1;
+    try {
+      const d = await site.getRoomDetail(roomId);
+      if (!this.isCurrentSwitch(request, current)) return;
+      if (!d.status && !d.isRecord) throw new Error('主播暂未开播');
+      const qs = await site.getPlayQualities(d);
+      if (!this.isCurrentSwitch(request, current)) return;
+      if (qs.length === 0) throw new Error('没有可用的清晰度');
+      const quality = this.pickDefaultQuality(qs);
+      const requestedAt = Date.now();
+      const urls = await site.getPlayUrls(d, qs[quality]);
+      if (!this.isCurrentSwitch(request, current)) return;
+      const upstreamUrls = urls.urls;
+      if (upstreamUrls.length === 0) throw new Error('没有可用的播放线路');
+      // Never register a target into the current relay: registration mutates its routes/clients.
+      if (d.siteId === 'douyu') {
+        const relay = new DouyuStreamRelay();
+        this.pendingSwitchRelay = relay;
+        urls.urls = await relay.register(upstreamUrls, urls.headers);
+        if (!this.isCurrentSwitch(request, current)) return;
+        if (urls.urls.length === 0) throw new Error('没有可用的播放线路');
+      }
+      // No awaits between retirement and source activation. Metadata stays old until this point;
+      // stop() drops firstFrame so the old picture is not presented under the new room's labels.
+      const play = this.player.wantsPlayback;
+      const relay = this.pendingSwitchRelay;
+      this.pendingSwitchRelay = null;
+      this.cancelPendingSwitch();
+      committedSeq = this.resetRoom(siteId, roomId, preview);
+      this.relay = relay;
+      this.switchSeq++;
+      this.detail = d;
+      this.qualities = qs;
+      this.online = d.online > 0 ? d.online : this.online;
+      this.loading = false;
+      committedRequest = this.playSeq;
+      HistoryStore.inst.record(d);
+      FollowStore.inst.updateFromDetail(d);
+      this.startDanmaku(d);
+      this.loadSuperChats(d, committedSeq);
+      await this.commitPlayUrls(quality, committedSeq, committedRequest, urls, upstreamUrls,
+        requestedAt, 0, false, false, play);
+    } catch (e) {
+      if (committedSeq >= 0) {
+        if (!this.disposed && committedSeq === this.seq && committedRequest === this.playSeq) {
+          this.loading = false;
+          this.error = `${e}`.replace('Error: ', '') || '加载失败';
+        }
+      } else if (this.isCurrentSwitch(request, current)) {
+        this.cancelPendingSwitch();
+        const message = `${e}`.replace('Error: ', '') || '加载失败';
+        this.player.notice = `${message}，保留当前直播间`;
+        this.player.noticeSeq++;
+      }
     }
-    this.switchSeq++;
-    await this.open(siteId, roomId, preview);
+  }
+
+  /** Exit intent must cancel preparation before the last-frame capture/return animation. */
+  cancelSwitch(): void {
+    this.cancelPendingSwitch();
+  }
+
+  private isCurrentSwitch(request: number, current: number): boolean {
+    // Old-room automatic renewal/recovery may run while preparing. Only an explicit user
+    // source action, another target, a room replacement or disposal cancels this user intent.
+    return !this.disposed && request === this.switchRequest && current === this.seq;
   }
 
   toggleFollow(): boolean {
@@ -721,6 +832,7 @@ export class RoomModel {
 
   dispose(): void {
     this.disposed = true;
+    this.cancelPendingSwitch();
     this.seq++;
     this.playSeq++;
     this.relay?.dispose();

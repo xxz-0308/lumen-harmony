@@ -82,7 +82,7 @@ deviceInfo.sdkApiVersion = 26;
 const material = await loadDockMaterial(false) as any;
 assert.equal((globalThis as any).materialModuleLoads, 1);
 assert.equal(material.options.interactive, false);
-assert.deepEqual(material.options.lightEffect, { color: '#FFFFFF' });
+assert.deepEqual(material.options.lightEffect, { color: C.navLight });
 const reduced = await loadDockMaterial(true) as any;
 assert.equal(reduced.options.lightEffect, null);
 let applied: any;

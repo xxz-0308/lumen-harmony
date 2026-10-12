@@ -126,7 +126,8 @@ export class IjkLivePlayer implements LivePlayerApi {
     }
     Log.i('player', `ijk unbind xcomponent=${id}`);
     this.context = null;
-    this.surfaceLost = this.native !== null;
+    // Source handoff detaches native before queued teardown finishes; retain the source intent.
+    this.surfaceLost = !this.released && this.wantPlay && this.urls.length > 0;
     this.session++;
     this.clearStall();
     this.clearStart();
@@ -484,6 +485,11 @@ export class IjkLivePlayer implements LivePlayerApi {
       try {
         p.off('audioInterrupt');
         await p.stopAsync();
+      } catch (e) {
+        Log.w('player', 'ijk stop failed');
+      }
+      // A failed stop must not leave the retiring player registered under this surface ID.
+      try {
         await p.releaseAsync();
       } catch (e) {
         Log.w('player', 'ijk release failed');

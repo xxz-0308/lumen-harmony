@@ -17,6 +17,8 @@ export class SiteResult {
   @Trace hasMore: boolean = false;
   /** Resync this row without replacing the other platform rows. */
   @Trace revision: number = 0;
+  /** Sequence ID of the room search that produced `rooms`, used to validate first-page reuse. */
+  querySeq: number = 0;
 
   constructor(siteId: SiteId) {
     this.siteId = siteId;
@@ -94,6 +96,11 @@ export class SearchModel {
     this.notify();
   }
 
+  private canSeedFromResult(res: SiteResult | undefined): boolean {
+    return res !== undefined && this.submittedMode === 'room' &&
+      res.querySeq === this.seq && !res.loading && res.error.length === 0;
+  }
+
   private rebuildFeed(): void {
     if (this.filter === 'all' || this.mode !== 'room' || !this.searched) {
       this.feed = null;
@@ -101,13 +108,22 @@ export class SearchModel {
     }
     const site = Sites.of(this.filter);
     const kw = this.keyword;
+    const res = this.results.find((r: SiteResult) => r.siteId === this.filter);
     let feed = this.feedCache.get(this.filter);
     if (feed === undefined) {
       feed = new RoomFeed((page: number): Promise<RoomPage> => site.searchRooms(kw, page));
       this.feedCache.set(this.filter, feed);
-      feed.load();
+      if (this.canSeedFromResult(res)) {
+        feed.seedFirstPage(res!.rooms, res!.hasMore);
+      } else {
+        feed.load();
+      }
     } else if (this.staleFeeds.delete(this.filter)) {
-      feed.load(true);
+      if (this.canSeedFromResult(res)) {
+        feed.seedFirstPage(res!.rooms, res!.hasMore);
+      } else {
+        feed.load(true);
+      }
     }
     this.feed = feed;
   }
@@ -123,12 +139,14 @@ export class SearchModel {
         if (seq !== this.seq) return;
         r.rooms = page.items;
         r.hasMore = page.hasMore;
+        r.querySeq = seq;
       } else {
         const page: AnchorPage = await site.searchAnchors(kw, 1);
         if (seq !== this.seq) return;
         r.anchors = page.items.slice().sort((a: LiveAnchorItem, b: LiveAnchorItem) =>
           (b.liveStatus ? 1 : 0) - (a.liveStatus ? 1 : 0));
         r.hasMore = page.hasMore;
+        r.querySeq = 0;
       }
     } catch (e) {
       Log.w('search', `${r.siteId} failed: ${e}`);

@@ -17,6 +17,7 @@ export interface MediaControls {
 export class BackgroundAudio {
   private static context: common.UIAbilityContext | null = null;
   private static session: avSession.AVSession | null = null;
+  private static sessionId: string = '';
   private static creating: Promise<avSession.AVSession | null> | null = null;
   private static controls: MediaControls | null = null;
   private static title: string = '';
@@ -85,6 +86,7 @@ export class BackgroundAudio {
     BackgroundAudio.syncTask();
     const s = BackgroundAudio.session;
     BackgroundAudio.session = null;
+    BackgroundAudio.sessionId = '';
     if (s !== null) {
       BackgroundAudio.destroySession(s);
     }
@@ -112,6 +114,7 @@ export class BackgroundAudio {
         return null;
       }
       BackgroundAudio.session = s;
+      BackgroundAudio.sessionId = s.sessionId;
       return s;
     });
     return BackgroundAudio.creating;
@@ -120,9 +123,17 @@ export class BackgroundAudio {
   private static async createSession(ctx: common.UIAbilityContext): Promise<avSession.AVSession | null> {
     try {
       const s = await avSession.createAVSession(ctx, 'Lumen', 'video');
-      s.on('play', () => BackgroundAudio.controls?.play());
-      s.on('pause', () => BackgroundAudio.controls?.pause());
-      s.on('stop', () => BackgroundAudio.controls?.pause());
+      // Capture only the ID, not the session object in its own native event listeners.
+      const sessionId = s.sessionId;
+      s.on('play', () => {
+        if (BackgroundAudio.sessionId === sessionId) BackgroundAudio.controls?.play();
+      });
+      s.on('pause', () => {
+        if (BackgroundAudio.sessionId === sessionId) BackgroundAudio.controls?.pause();
+      });
+      s.on('stop', () => {
+        if (BackgroundAudio.sessionId === sessionId) BackgroundAudio.controls?.pause();
+      });
       const agent = await BackgroundAudio.launchAgent(ctx);
       if (agent !== null) {
         await s.setLaunchAbility(agent);
@@ -137,13 +148,8 @@ export class BackgroundAudio {
   }
 
   private static destroySession(s: avSession.AVSession): void {
-    try {
-      s.off('play');
-      s.off('pause');
-      s.off('stop');
-    } catch (e) {
-      // ignore
-    }
+    // off() makes three synchronous service calls (~12ms on the device). destroy() owns
+    // listener/resource cleanup; identity-gated callbacks cannot control a replacement room.
     s.deactivate().catch(() => {}).then(() => s.destroy()).catch(() => {
       Log.w('background', 'Could not destroy AVSession');
     });

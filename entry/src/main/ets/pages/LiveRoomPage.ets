@@ -1,6 +1,7 @@
 import { image } from '@kit.ImageKit';
 import { KeyboardAvoidMode, promptAction, UIContext } from '@kit.ArkUI';
 import { RoomModel, ScCard } from '../room/RoomModel';
+import { RoomMount } from '../room/RoomMount';
 import { VideoLayer } from '../room/VideoLayer';
 import {
   ChatList,
@@ -13,6 +14,7 @@ import {
   SideChatOverlay
 } from '../room/RoomPanels';
 import { LiveRouteParam, Nav } from '../app/Nav';
+import { NavigationActivity } from '../app/NavigationActivity';
 import { RetainedRoomPlayback } from '../app/RetainedRoomPlayback';
 import { RoomBulletDelivery } from '../danmaku/RoomBulletDelivery';
 import { DanmakuEngine } from '../danmaku/DanmakuEngine';
@@ -22,18 +24,20 @@ import { LeaveBehavior, Settings } from '../app/Settings';
 import { MediaVolume } from '../platform/MediaVolume';
 import { FollowItem, FollowStore } from '../app/Stores';
 import { PlayState } from '../player/LivePlayer';
-import { C, formatDuration, formatOnline, Motion, Radius } from '../theme/Theme';
-import { Avatar, IconButton, Segmented, SiteBadge } from '../components/Basics';
+import { C, formatDuration, formatOnline, Motion, Radius, SiteStyle } from '../theme/Theme';
+import { Avatar, IconButton, LiveDot } from '../components/Basics';
 import { AmbientGlow } from '../components/Decor';
 import { BackgroundAudio } from '../platform/BackgroundAudio';
 import { LivePip } from '../platform/LivePip';
 import { Log } from '../util/Log';
+import { PerfTrace } from '../util/PerfTrace';
 import { isNarrowTheater, showTheaterPanel } from '../room/TheaterLayout';
 import { RoomSheet } from '../room/RoomSheets';
 import { layoutRoomSheet, RoomSheetLayout, SheetKind } from '../room/RoomSheetLayout';
 
-const INFO_H: number = 84;
-const GAP: number = 20;
+const INFO_H: number = 88;
+const GAP: number = 28;
+const PANEL_TABS: string[] = ['弹幕', '关注', '信息'];
 
 @ComponentV2
 export struct LiveRoomPage {
@@ -49,7 +53,14 @@ export struct LiveRoomPage {
   private appliedDanmakuStyle: string = '';
   private appliedVolume: number = -1;
   @Local fullscreen: boolean = false;
-  @Local presentationActive: boolean = true;
+  @Local presentationActive: boolean = false;
+  @Local surfaceMounted: boolean = false;
+  @Local topMounted: boolean = false;
+  @Local bottomMounted: boolean = false;
+  @Local chromeMounted: boolean = false;
+  @Local panelMounted: boolean = false;
+  @Local glowMounted: boolean = false;
+  private mount: RoomMount = new RoomMount();
   @Local panelOpen: boolean = Settings.inst.theaterPanelOpen;
   @Local drawerOpen: boolean = false;
   /**
@@ -83,6 +94,7 @@ export struct LiveRoomPage {
   private pipStartRoom: string = '';
   private pipStartTimer: number = -1;
   private fullscreenTarget: boolean = false;
+  private fullscreenSeq: number = 0;
   @Local exitOpacity: number = 1;
   /**
    * Enter/exit: the page background and the room's chrome fade separately while a copy of the
@@ -92,6 +104,7 @@ export struct LiveRoomPage {
   @Local bgFade: number = 1;
   @Local chromeFade: number = 1;
   @Local roomTransitioning: boolean = false;
+  @Local snapshotReturn: boolean = false;
   @Local morphOn: boolean = false;
   @Local morphX: number = 0;
   @Local morphY: number = 0;
@@ -104,6 +117,8 @@ export struct LiveRoomPage {
   private videoXc: XComponentController | null = null;
   private mainDanmaku: DanmakuEngine | null = null;
   private backIssued: boolean = false;
+  private rootHeld: boolean = false;
+  private returnAnimating: boolean = false;
   private backCaptureTimer: number = -1;
   @Local sleepInput: string = '';
   @Local sleepMinutes: number = 0;
@@ -154,8 +169,6 @@ export struct LiveRoomPage {
         this.model.resume();
       }
       if (!active && !restoring && !this.env.foreground) {
-        // The PiP window was closed while the app stays in the background. Opening the app from
-        // its icon can also stop PiP just before the foreground event, so check again shortly.
         this.pipCloseTimer = setTimeout(() => {
           this.pipCloseTimer = -1;
           if (!this.disposed && !this.pipActive && !this.env.foreground) {
@@ -219,7 +232,6 @@ export struct LiveRoomPage {
     this.env.subscribeForeground(this.foregroundListener);
     this.syncSettings();
     this.onChatPresentation();
-    // The cover must be available before the destination's first transition frame.
     this.model.preview = this.route.preview;
   }
 
@@ -240,6 +252,20 @@ export struct LiveRoomPage {
     });
     this.model.onBullet = (text: string, color: number) => this.bullets.push(text, color);
     this.model.open(p.siteId, p.roomId, p.preview);
+    this.mount.start(this.getUIContext(), (stage: number) => {
+      if (this.disposed || this.exiting) return;
+      if (stage === 0) this.surfaceMounted = true;
+      if (stage === 1) this.topMounted = true;
+      if (stage === 2) this.bottomMounted = true;
+      if (stage === 3) this.chromeMounted = true;
+      if (stage === 5) this.glowMounted = true;
+      if (stage === 4) {
+        this.panelMounted = true;
+        this.presentationActive = true;
+        this.onChatPresentation();
+        this.onBulletPresentation();
+      }
+    });
     if (Settings.inst.autoFullscreen) {
       this.setFullscreen(true, false);
     }
@@ -248,13 +274,26 @@ export struct LiveRoomPage {
 
   aboutToDisappear(): void {
     this.disposeRoom('component');
+    if (!this.returnAnimating ||
+      (Nav.stack.getAllPathName().length > 0 && !Nav.isLiveOwner(this.playbackOwner))) {
+      this.releaseRootPresentation();
+    }
   }
 
-  /**
-   * Leaving the room. Usually from aboutToDisappear, but a page that once backed a PiP window is
-   * cached by the system (navigationId) and is not destroyed when popped, so the destination's
-   * willDisappear also ends the room; otherwise it keeps playing, unseen, after Back.
-   */
+  private holdRootPresentation(): void {
+    if (this.rootHeld) return;
+    this.rootHeld = true;
+    NavigationActivity.inst.holdRoot();
+  }
+
+  private releaseRootPresentation(): void {
+    if (!this.rootHeld) return;
+    this.rootHeld = false;
+    // onHidden also covers SDK-cached destinations which do not immediately disappear.
+    // Reconcile the list outside the framework's animation-finish/layout callback.
+    setTimeout(() => PerfTrace.run('root.resume', () => NavigationActivity.inst.releaseRoot()), 0);
+  }
+
   private disposeRoom(why: string): void {
     if (this.pipHandoff) return;
     if (this.disposed) {
@@ -262,6 +301,7 @@ export struct LiveRoomPage {
     }
     Log.i('page', `live dispose by ${why}`);
     this.disposed = true;
+    this.mount.cancel();
     this.clearPipStart();
     RetainedRoomPlayback.release(this.playbackOwner);
     this.presentationActive = false;
@@ -269,20 +309,24 @@ export struct LiveRoomPage {
     this.env.unsubscribeForeground(this.foregroundListener);
     this.clearPipCloseCheck();
     this.clearBackCapture();
-    this.pip.dispose();
+    PerfTrace.run('room.pip.dispose', () => this.pip.dispose());
     this.bullets.dispose();
     this.pipDanmaku.dispose();
     this.videoXc = null;
     this.mainDanmaku = null;
     this.clearPipGrace();
-    BackgroundAudio.detach(this.audioOwner);
-    this.model.dispose();
-    AppEnv.inst.setKeepScreenOn(false);
-    AppEnv.inst.setBrightness(-1);
+    PerfTrace.run('room.audio.detach', () => BackgroundAudio.detach(this.audioOwner));
+    PerfTrace.run('room.model.dispose', () => this.model.dispose());
+    PerfTrace.run('room.window.restore', () => {
+      AppEnv.inst.setKeepScreenOn(false);
+      AppEnv.inst.setBrightness(-1);
+    });
+    const restoreWindow = this.fullscreen || this.fullscreenTarget;
+    this.fullscreen = false;
     this.fullscreenTarget = false;
-    if (this.fullscreen) {
-      this.env.setImmersive(false);
-      this.env.setLandscape(false);
+    this.fullscreenSeq++;
+    if (restoreWindow) {
+      this.env.exitVideoFullscreen().catch(() => {});
     }
     clearTimeout(this.hideTimer);
     clearTimeout(this.panelHideTimer);
@@ -328,7 +372,6 @@ export struct LiveRoomPage {
   private pausePlayback(): void {
     if (this.disposed) return;
     this.model.player.pause();
-    // Playback intent changes before native paused arrives; release AVSession/task now.
     this.onPlayState();
   }
 
@@ -342,13 +385,10 @@ export struct LiveRoomPage {
     AppEnv.inst.setKeepScreenOn(this.env.foreground && active);
     BackgroundAudio.setMetadata(this.model.title, this.model.userName, this.audioOwner);
     const leave = this.leaveBehavior;
-    // The continuous task follows the room, not transient loading states: it cannot be
-    // re-requested from the background after a line switch.
     const alive = !this.sleepExpired && state !== PlayState.Error && state !== PlayState.Idle;
     BackgroundAudio.update(alive && this.model.player.wantsPlayback,
       alive && this.model.player.wantsPlayback, leave !== 'pause', this.audioOwner);
     this.pip.setPlaying(active);
-    // Arm auto-PiP while loading too: the Home gesture can arrive before the first frame.
     this.pip.setAutoStart(leave === 'pip' && alive && this.model.player.wantsPlayback);
     if (!this.env.foreground) {
       if (leave === 'pip') {
@@ -362,19 +402,16 @@ export struct LiveRoomPage {
     }
   }
 
-  /** The leave behaviour in effect; PiP falls back to pausing on devices without it. */
   get leaveBehavior(): LeaveBehavior {
     const leave = this.settings.leaveBehavior;
     return leave === 'pip' && !this.pipSupported ? 'pause' : leave;
   }
 
-  /** Pauses a stream that must not keep playing while the app is hidden. */
   private pauseForBackground(): void {
     if (this.disposed) return;
     if (this.env.foreground || this.leaveBehavior === 'audio' || this.pipActive) {
       return;
     }
-    // Loading/buffering streams would otherwise start playing hidden once prepared.
     const state = this.model.player.state;
     if (this.model.player.wantsPlayback && state !== PlayState.Error && state !== PlayState.Idle) {
       this.model.player.pause();
@@ -461,11 +498,10 @@ export struct LiveRoomPage {
     };
     const restoreWindow = this.fullscreen || this.fullscreenTarget;
     this.fullscreenTarget = false;
+    this.fullscreenSeq++;
     if (restoreWindow) {
       this.fullscreen = false;
-      this.env.setImmersive(false);
-      this.env.setLandscape(false);
-      leave();
+      this.env.exitVideoFullscreen().catch(() => {}).finally(() => leave());
     } else {
       leave();
     }
@@ -490,8 +526,9 @@ export struct LiveRoomPage {
   private onRoomShown(): void {
     if (this.disposed) return;
     this.pipHandoff = false;
+    this.snapshotReturn = false;
     RetainedRoomPlayback.release(this.playbackOwner);
-    this.presentationActive = true;
+    this.presentationActive = this.panelMounted;
     this.restoreMainDanmaku();
     this.exiting = false;
     this.backIssued = false;
@@ -538,12 +575,11 @@ export struct LiveRoomPage {
 
   get panelW(): number {
     if (this.rootW >= 1100) {
-      return 372;
+      return 380;
     }
     return this.narrow ? Math.min(330, Math.max(0, this.rootW - 24)) : 330;
   }
 
-  /** Narrow windows overlay the panel on the video instead of dropping it. */
   get narrow(): boolean {
     return isNarrowTheater(this.rootW);
   }
@@ -563,7 +599,6 @@ export struct LiveRoomPage {
       this.panelPresent = true;
       return;
     }
-    // Let the fade/slide-out finish, then drop the panel from hit testing entirely.
     this.panelHideTimer = setTimeout(() => {
       this.panelHideTimer = -1;
       if (!this.showPanel) {
@@ -573,16 +608,16 @@ export struct LiveRoomPage {
   }
 
   get leftW(): number {
-    return this.rootW - (this.showPanel && !this.narrow ? this.panelW + 12 : 0);
+    return this.rootW - (this.showPanel && !this.narrow ? this.panelW + 16 : 0);
   }
 
   get topInset(): number {
-    return this.env.statusBarHeight + 12;
+    return this.env.statusBarHeight + 16;
   }
 
   get slotW(): number {
     const maxW = this.leftW - GAP * 2;
-    const maxH = this.rootH - this.topInset - INFO_H - 16 - this.env.navBarHeight;
+    const maxH = this.rootH - this.topInset - INFO_H - 20 - this.env.navBarHeight;
     return Math.max(0, Math.min(maxW, maxH * 16 / 9));
   }
 
@@ -596,11 +631,13 @@ export struct LiveRoomPage {
 
   // ---------- behaviour ----------
 
-  private setFullscreen(on: boolean, animated: boolean = true): void {
-    if (this.disposed || this.pipHandoff || on === this.fullscreenTarget) return;
-    this.fullscreenTarget = on;
-    this.env.setImmersive(on);
-    this.env.setLandscape(on);
+  private get videoAspect(): number {
+    const w = this.model.player?.videoWidth ?? 0;
+    const h = this.model.player?.videoHeight ?? 0;
+    return w > 0 && h > 0 ? w / h : 16 / 9;
+  }
+
+  private applyFullscreenUi(on: boolean, animated: boolean): void {
     if (!on) this.scToast = null;
     if (animated && !this.env.reduceMotion) {
       this.getUIContext().animateTo({ curve: Motion.hero }, () => { this.fullscreen = on; });
@@ -608,6 +645,28 @@ export struct LiveRoomPage {
       this.fullscreen = on;
     }
     this.showControls();
+  }
+
+  private setFullscreen(on: boolean, animated: boolean = true): void {
+    if (this.disposed || this.pipHandoff || on === this.fullscreenTarget) return;
+    this.fullscreenTarget = on;
+    const seq = ++this.fullscreenSeq;
+    if (on) {
+      this.env.enterVideoFullscreen(this.videoAspect).then(() => {
+        if (this.disposed || this.pipHandoff || seq !== this.fullscreenSeq || !this.fullscreenTarget) return;
+        this.applyFullscreenUi(true, animated);
+      }).catch((e: Error) => {
+        if (this.disposed || this.pipHandoff || seq !== this.fullscreenSeq) return;
+        this.fullscreenTarget = this.fullscreen;
+        Log.w('page', `enter video fullscreen failed: ${e.message}`);
+        promptAction.showToast({ message: '当前窗口不支持全屏切换' });
+      });
+    } else {
+      this.applyFullscreenUi(false, animated);
+      this.env.exitVideoFullscreen().catch((e: Error) => {
+        Log.w('page', `exit video fullscreen failed: ${e.message}`);
+      });
+    }
   }
 
   private armHide(): void {
@@ -695,7 +754,6 @@ export struct LiveRoomPage {
     this.lastMediaLevel = level;
     const intent = ++this.mediaIntent;
     const roomKey = `${this.model.siteId}_${this.model.roomId}`;
-    // Accepted system-volume writes remain ordered even if their originating page leaves.
     this.mediaWrite = this.mediaWrite.then(() => MediaVolume.write(level)).catch(() => false);
     this.mediaWrite.then((ok: boolean) => {
       if (!ok && !this.disposed && intent === this.mediaIntent &&
@@ -775,9 +833,6 @@ export struct LiveRoomPage {
 
   private pickFollow(f: FollowItem): void {
     this.closeSheet();
-    if (f.siteId === this.model.siteId && f.roomId === this.model.roomId) {
-      return;
-    }
     this.followed = true;
     this.model.switchTo(f.siteId, f.roomId, f.toRoomItem());
   }
@@ -788,7 +843,6 @@ export struct LiveRoomPage {
       this.panelOpen = open;
       this.drawerOpen = this.narrow && open;
     });
-    // Only this explicit user action writes the preference; resizing/fullscreen never does.
     this.settings.theaterPanelOpen = open;
     this.settings.scheduleSave();
     this.showControls();
@@ -811,8 +865,13 @@ export struct LiveRoomPage {
   private goBack(): void {
     if (this.exiting || this.disposed || this.pipHandoff) return;
     this.exiting = true;
-    // Shrink the picture the viewer was actually watching, not the stale card thumbnail. The grab
-    // is short and bounded; a slow or failed one falls back to the cover.
+    this.returnAnimating = true;
+    this.model.cancelSwitch();
+    this.mount.cancel();
+    this.presentationActive = false;
+    this.onChatPresentation();
+    this.onBulletPresentation();
+    this.holdRootPresentation();
     this.backCaptureTimer = setTimeout(() => {
       this.backCaptureTimer = -1;
       this.fadeBack();
@@ -825,7 +884,8 @@ export struct LiveRoomPage {
 
   private async captureLastFrame(): Promise<void> {
     const xc = this.videoXc;
-    if (xc === null || this.route.coverW <= 0 || this.env.reduceMotion || !this.model.player.firstFrame) {
+    if (xc === null || this.route.coverW <= 0 || this.env.reduceMotion || !this.model.player.firstFrame ||
+      this.sourceRoomKey !== `${this.model.siteId}_${this.model.roomId}`) {
       return;
     }
     try {
@@ -837,7 +897,6 @@ export struct LiveRoomPage {
       }
       const pixel = await image.createPixelMapFromSurface(xc.getXComponentSurfaceId(),
         { x: 0, y: 0, size: { width: w, height: h } });
-      // A timed-out capture must not replace the image during the return animation.
       if (this.backIssued || this.disposed) {
         pixel.release();
       } else {
@@ -845,6 +904,17 @@ export struct LiveRoomPage {
       }
     } catch (e) {
       Log.w('page', 'last frame capture failed; leaving with the cover');
+    }
+  }
+
+  private clearMorph(): void {
+    this.morphOn = false;
+    const pixel = this.morphPixel;
+    this.morphPixel = null;
+    if (pixel !== null) {
+      RoomMount.afterPaint(this.getUIContext(), async (): Promise<void> => {
+        try { await pixel.release(); } catch (e) { /* Already released during window teardown. */ }
+      });
     }
   }
 
@@ -858,17 +928,14 @@ export struct LiveRoomPage {
   private fadeBack(): void {
     if (this.disposed || this.sleepPopIssued || this.backIssued) return;
     this.backIssued = true;
-    // The destination's customTransition morphs the picture back into its card.
     Nav.stack.pop(true);
   }
 
-  /** Where the player sits right now (theater slot, or the whole window in fullscreen). */
   private playerRect(): number[] {
     return this.fullscreen ? [0, 0, this.rootW, this.rootH] :
       [this.slotX, this.topInset, this.slotW, this.slotH];
   }
 
-  /** Decode and cache the overlay at player size once; only render transforms animate. */
   private prepareMorph(r: number[]): void {
     const player = this.playerRect();
     this.morphW = Math.max(1, player[2]);
@@ -890,6 +957,11 @@ export struct LiveRoomPage {
   }
 
   private roomTransition(operation: NavigationOperation, isEnter: boolean): NavDestinationTransition[] | undefined {
+    if (operation === NavigationOperation.POP && (this.pipHandoff || this.sleepPopIssued)) {
+      this.returnAnimating = false;
+      this.releaseRootPresentation();
+      return undefined;
+    }
     const reduce = this.env.reduceMotion;
     const fromCard = this.route.coverW > 0 && !reduce;
     if (isEnter && operation === NavigationOperation.PUSH) {
@@ -897,8 +969,6 @@ export struct LiveRoomPage {
       this.bgFade = 0;
       this.chromeFade = 0;
       if (!fromCard) {
-        // No card to morph from: fade only. Scaling the whole page also transforms the native
-        // surface and makes the entire room and its glass panels repaint on every frame.
         return [{
           duration: reduce ? 160 : 240,
           curve: Curve.EaseOut,
@@ -940,6 +1010,8 @@ export struct LiveRoomPage {
       }];
     }
     if (!isEnter && operation === NavigationOperation.POP) {
+      this.returnAnimating = true;
+      this.holdRootPresentation();
       this.roomTransitioning = true;
       const sameRoom = this.sourceRoomKey === `${this.model.siteId}_${this.model.roomId}`;
       if (!fromCard || !sameRoom) {
@@ -952,10 +1024,13 @@ export struct LiveRoomPage {
           },
           onTransitionEnd: () => {
             this.roomTransitioning = false;
-            this.morphPixel = null;
+            this.clearMorph();
+            this.returnAnimating = false;
+            this.releaseRootPresentation();
           }
         }];
       }
+      this.snapshotReturn = true;
       this.prepareMorph(this.playerRect());
       return [{
         duration: 280,
@@ -964,8 +1039,7 @@ export struct LiveRoomPage {
           this.setMorph(this.cardRect);
         },
         onTransitionEnd: () => {
-          this.morphOn = false;
-          this.morphPixel = null;
+          this.clearMorph();
         }
       }, {
         duration: 120,
@@ -982,13 +1056,14 @@ export struct LiveRoomPage {
         },
         onTransitionEnd: () => {
           this.roomTransitioning = false;
+          this.returnAnimating = false;
+          this.releaseRootPresentation();
         }
       }];
     }
     return undefined;
   }
 
-  /** The image that travels between card and player: the card's own cover when we have it. */
   get morphCover(): string {
     const preview = this.route.preview;
     return preview !== null && preview.cover.length > 0 ? preview.cover : this.model.cover;
@@ -999,7 +1074,7 @@ export struct LiveRoomPage {
       this.closeSheet();
       return true;
     }
-    if (this.fullscreen) {
+    if (this.fullscreen || this.fullscreenTarget) {
       this.setFullscreen(false);
       return true;
     }
@@ -1014,7 +1089,7 @@ export struct LiveRoomPage {
     Row({ space: 12 }) {
       IconButton({ dim: 44,
         icon: $r('sys.symbol.chevron_backward'), glass: true, label: '返回', onTap: () => {
-          if (this.fullscreen) {
+          if (this.fullscreen || this.fullscreenTarget) {
             this.setFullscreen(false);
           } else {
             this.goBack();
@@ -1040,22 +1115,22 @@ export struct LiveRoomPage {
         Blank()
       }
       Row({ space: 6 }) {
-        SymbolGlyph($r('sys.symbol.flame_fill'))
-          .fontSize(13)
-          .fontColor(['#FFB27A'])
+        LiveDot({ dim: 6 })
         Text(formatOnline(this.model.online))
           .fontSize(13)
+          .fontWeight(FontWeight.Medium)
           .fontColor(C.onMedia)
           .fontFeature('"tnum" on')
       }
-      .padding({ left: 10, right: 12, top: 6, bottom: 6 })
+      .padding({ left: 12, right: 14, top: 6, bottom: 6 })
       .borderRadius(Radius.pill)
-      .backgroundColor('#40000000')
+      .backgroundColor('#4D000000')
       .backgroundBlurStyle(BlurStyle.Thin)
       if (this.fullscreen) {
         IconButton({ dim: 44,
           icon: this.followed ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
-          glass: true, active: this.followed, toggleState: true, label: this.followed ? '已关注' : '关注',
+          glass: true, active: this.followed, activeTint: C.live, toggleState: true,
+          label: this.followed ? '已关注' : '关注',
           onTap: () => this.toggleFollow()
         })
         IconButton({ dim: 44,
@@ -1068,7 +1143,7 @@ export struct LiveRoomPage {
     .padding({
       left: 16, right: 16, top: this.fullscreen ? Math.max(16, this.env.statusBarHeight) : 14, bottom: 28
     })
-    .linearGradient({ angle: 180, colors: [['#99000000', 0], ['#00000000', 1]] })
+    .linearGradient({ angle: 180, colors: [['#80000000', 0], ['#00000000', 1]] })
   }
 
   @Builder
@@ -1077,7 +1152,7 @@ export struct LiveRoomPage {
       .fontSize(13)
       .fontWeight(FontWeight.Medium)
       .fontColor(C.onMedia)
-      .height(44)
+      .height(40)
       .padding({ left: 16, right: 16 })
       .borderRadius(Radius.pill)
       .backgroundColor('#40000000')
@@ -1099,7 +1174,7 @@ export struct LiveRoomPage {
       .layoutWeight(1)
       .height(48)
       .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Auto)
+      .scrollBar(BarState.Off)
       .onScrollStart(() => this.showControls())
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down && e.touches.length > 0) {
@@ -1115,7 +1190,7 @@ export struct LiveRoomPage {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 28, bottom: this.fullscreen ? Math.max(16, this.env.navBarHeight + 8) : 12 })
-    .linearGradient({ angle: 0, colors: [['#99000000', 0], ['#00000000', 1]] })
+    .linearGradient({ angle: 0, colors: [['#80000000', 0], ['#00000000', 1]] })
   }
 
   @Builder
@@ -1155,7 +1230,7 @@ export struct LiveRoomPage {
         this.pill(() => this.lineText, () => this.openSheet('line'))
       }
     }
-    .width(Math.max(660, (this.fullscreen ? this.rootW : this.slotW) - 86))
+    .width(Math.max(620, (this.fullscreen ? this.rootW : this.slotW) - 86))
     .height(48)
   }
 
@@ -1238,9 +1313,13 @@ export struct LiveRoomPage {
       }
 
       Column() {
-        this.topBar()
+        if (this.topMounted) {
+          this.topBar()
+        }
         Blank()
-        this.bottomBar()
+        if (this.bottomMounted) {
+          this.bottomBar()
+        }
       }
       .width('100%')
       .height('100%')
@@ -1249,7 +1328,9 @@ export struct LiveRoomPage {
       .animation({ duration: 220, curve: Curve.EaseOut })
       .hitTestBehavior(this.controls ? HitTestMode.Default : HitTestMode.None)
 
-      this.hudView()
+      if (this.bottomMounted) {
+        this.hudView()
+      }
     }
     .width('100%')
     .height('100%')
@@ -1267,7 +1348,6 @@ export struct LiveRoomPage {
           .onAction(() => this.openSheet('follows')),
         PinchGesture()
           .onActionEnd((e: GestureEvent) => {
-            // Designed to behave the same in theater and fullscreen.
             if (e.scale > 1.08 && !this.fillVideo) {
               this.fillVideo = true;
               this.settings.videoFill = true;
@@ -1305,13 +1385,14 @@ export struct LiveRoomPage {
     )
   }
 
+  /** Borderless Editorial Streamer Info Bar floating in pure negative space below the 16:9 video. */
   @Builder
   infoBar() {
-    Row({ space: 14 }) {
+    Row({ space: 16 }) {
       Avatar({ src: this.model.avatar, dim: 48, live: this.model.detail?.status ?? false })
       Column({ space: 6 }) {
         Text(this.model.title.length > 0 ? this.model.title : this.model.userName)
-          .fontSize(18)
+          .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(C.text1)
           .maxLines(1)
@@ -1321,22 +1402,23 @@ export struct LiveRoomPage {
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(C.text2)
-          SiteBadge({ siteId: this.model.siteId, onMedia: false })
+          Text(`·  ${SiteStyle.label(this.model.siteId)}`)
+            .fontSize(13)
+            .fontColor(C.text3)
           if (this.model.area.length > 0) {
-            Text(this.model.area)
-              .fontSize(12)
+            Text(`·  ${this.model.area}`)
+              .fontSize(13)
               .fontColor(C.text3)
           }
           if ((this.model.detail?.startTime ?? 0) > 0) {
-            Text(formatDuration(this.model.detail?.startTime ?? 0))
-              .fontSize(12)
+            Text(`·  ${formatDuration(this.model.detail?.startTime ?? 0)}`)
+              .fontSize(13)
               .fontColor(C.text3)
           }
         }
       }
       .width(Math.max(0, this.slotW - 172))
       .alignItems(HorizontalAlign.Start)
-
     }
     .width(this.slotW)
     .height(INFO_H)
@@ -1351,7 +1433,7 @@ export struct LiveRoomPage {
     Row({ space: 8 }) {
       IconButton({ dim: 44,
         icon: this.followed ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'),
-        active: this.followed, toggleState: true, label: this.followed ? '已关注' : '关注',
+        active: this.followed, activeTint: C.live, toggleState: true, label: this.followed ? '已关注' : '关注',
         onTap: () => this.toggleFollow()
       })
       IconButton({ dim: 44,
@@ -1366,63 +1448,157 @@ export struct LiveRoomPage {
     .visibility(this.fullscreen ? Visibility.None : Visibility.Visible)
   }
 
+  @Local drawnPanelTabs: number[] = [0];
+  @Local visitedPanelTabs: number[] = [0];
+  private panelTabSeq: number = 0;
+
+  private panelTabOffset(tab: number): number {
+    if (this.env.reduceMotion || tab === this.panelTab) return 0;
+    return tab < this.panelTab ? -24 : 24;
+  }
+
+  private selectPanelTab(next: number): void {
+    if (next < 0 || next >= PANEL_TABS.length || next === this.panelTab) return;
+    const seq = ++this.panelTabSeq;
+    if (!this.visitedPanelTabs.includes(next)) {
+      this.visitedPanelTabs = this.visitedPanelTabs.concat(next);
+    }
+    if (next === 1) {
+      FollowStore.inst.refreshAll();
+    }
+    if (this.env.reduceMotion) {
+      this.panelTab = next;
+      this.drawnPanelTabs = [next];
+      return;
+    }
+    if (!this.drawnPanelTabs.includes(next)) {
+      this.drawnPanelTabs = this.drawnPanelTabs.concat(next);
+    }
+    this.getUIContext().animateTo({
+      duration: 260,
+      curve: Motion.snappy,
+      onFinish: () => {
+        if (!this.disposed && seq === this.panelTabSeq) {
+          this.drawnPanelTabs = [this.panelTab];
+        }
+      }
+    }, () => {
+      this.panelTab = next;
+    });
+  }
+
+  private onPanelSwipe(e: GestureEvent): void {
+    const dx = e.offsetX;
+    const dy = e.offsetY;
+    if (Math.abs(dx) < 32 || Math.abs(dx) < Math.abs(dy) * 1.15) return;
+    if (dx < 0 && this.panelTab < PANEL_TABS.length - 1) {
+      this.selectPanelTab(this.panelTab + 1);
+    } else if (dx > 0 && this.panelTab > 0) {
+      this.selectPanelTab(this.panelTab - 1);
+    }
+  }
+
+  /**
+   * Borderless "Apple Music Live Lyrics" Right Panel:
+   * Zero outer box or border in standard theater mode; clean editorial text tabs and top/bottom
+   * gradient fade scrims over the live chat stream.
+   */
   @Builder
   sidePanel() {
     Column() {
-      Row() {
-        Segmented({
-          items: ['弹幕', '关注', '信息'],
-          selected: this.panelTab,
-          segmentWidth: Math.min(76, Math.max(40, (this.panelW - 60) / 3)),
-          onSelect: (i: number) => {
-            this.panelTab = i;
-            if (i === 1) {
-              FollowStore.inst.refreshAll();
-            }
+      Row({ space: 26 }) {
+        ForEach(PANEL_TABS, (label: string, i: number) => {
+          Column({ space: 5 }) {
+            Text(label)
+              .fontSize(this.panelTab === i ? 16 : 15)
+              .fontWeight(this.panelTab === i ? FontWeight.Bolder : FontWeight.Medium)
+              .fontColor(this.panelTab === i ? C.text1 : C.text3)
+            Row()
+              .width(this.panelTab === i ? 16 : 0)
+              .height(2.5)
+              .borderRadius(2)
+              .backgroundColor(C.text1)
+              .opacity(this.panelTab === i ? 1 : 0)
+              .animation({ duration: 180, curve: Curve.EaseOut })
           }
-        })
+          .alignItems(HorizontalAlign.Center)
+          .padding({ top: 6, bottom: 4 })
+          .onClick(() => this.selectPanelTab(i))
+        }, (label: string) => label)
+        Blank()
         if (this.narrow) {
           IconButton({ dim: 44, icon: $r('sys.symbol.xmark'), label: '收起弹幕侧栏',
             onTap: () => this.togglePanel() })
         }
       }
       .width('100%')
-      .justifyContent(FlexAlign.Center)
-      .padding({ top: 14, bottom: 10 })
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: 18, right: 18, top: 12, bottom: 8 })
 
       Stack() {
-        ChatList({ model: this.model, dark: this.env.isDark,
-          active: this.env.foreground && this.showPanel && !this.fullscreen && this.panelTab === 0 })
-          .visibility(this.panelTab === 0 ? Visibility.Visible : Visibility.Hidden)
-        if (this.panelTab === 1) {
-          LiveFollowList({
-            currentKey: `${this.model.siteId}_${this.model.roomId}`,
-            onPick: (f: FollowItem) => this.pickFollow(f)
-          })
-            .padding({ left: 8, right: 8 })
+        Stack() {
+          ChatList({ model: this.model, dark: this.env.isDark,
+            active: this.env.foreground && this.presentationActive && this.showPanel && !this.fullscreen && this.panelTab === 0 })
         }
-        if (this.panelTab === 2) {
-          RoomInfo({ model: this.model })
+        .width('100%')
+        .height('100%')
+        .visibility(this.drawnPanelTabs.includes(0) ? Visibility.Visible : Visibility.None)
+        .opacity(this.panelTab === 0 ? 1 : 0)
+        .translate({ x: this.panelTabOffset(0) })
+        .enabled(this.panelTab === 0)
+        .hitTestBehavior(this.panelTab === 0 ? HitTestMode.Default : HitTestMode.None)
+
+        if (this.visitedPanelTabs.includes(1)) {
+          Stack() {
+            LiveFollowList({
+              currentKey: `${this.model.siteId}_${this.model.roomId}`,
+              onPick: (f: FollowItem) => this.pickFollow(f)
+            })
+              .padding({ left: 8, right: 8 })
+          }
+          .width('100%')
+          .height('100%')
+          .visibility(this.drawnPanelTabs.includes(1) ? Visibility.Visible : Visibility.None)
+          .opacity(this.panelTab === 1 ? 1 : 0)
+          .translate({ x: this.panelTabOffset(1) })
+          .enabled(this.panelTab === 1)
+          .hitTestBehavior(this.panelTab === 1 ? HitTestMode.Default : HitTestMode.None)
+        }
+
+        if (this.visitedPanelTabs.includes(2)) {
+          Stack() {
+            RoomInfo({ model: this.model })
+          }
+          .width('100%')
+          .height('100%')
+          .visibility(this.drawnPanelTabs.includes(2) ? Visibility.Visible : Visibility.None)
+          .opacity(this.panelTab === 2 ? 1 : 0)
+          .translate({ x: this.panelTabOffset(2) })
+          .enabled(this.panelTab === 2)
+          .hitTestBehavior(this.panelTab === 2 ? HitTestMode.Default : HitTestMode.None)
         }
       }
       .layoutWeight(1)
       .width('100%')
+      .clip(true)
     }
     .width(this.panelW)
     .id('theater_chat_panel')
-    .height(this.rootH - this.topInset - 12 - this.env.navBarHeight)
-    .position({ x: this.rootW - this.panelW - 12, y: this.topInset })
+    .height(this.rootH - this.topInset - 16 - this.env.navBarHeight)
+    .position({ x: this.rootW - this.panelW - 16, y: this.topInset })
     .borderRadius(Radius.xl)
-    .backgroundColor(C.glassTint)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-    .borderWidth(1)
-    .borderColor(C.glassStroke)
+    .backgroundColor(this.env.isDark ? C.glassTint : '#14000000')
+    .backgroundBlurStyle(this.env.isDark ? BlurStyle.COMPONENT_THIN : BlurStyle.NONE)
     .clip(true)
     .renderGroup(this.roomTransitioning)
     .visibility(this.fullscreen || !this.panelPresent ? Visibility.None : Visibility.Visible)
     .opacity(this.showPanel && !this.fullscreen ? 1 : 0)
     .translate({ x: this.showPanel && !this.fullscreen ? 0 : 40 })
     .hitTestBehavior(this.showPanel && !this.fullscreen ? HitTestMode.Default : HitTestMode.None)
+    .priorityGesture(
+      PanGesture({ direction: PanDirection.Horizontal, distance: 16 })
+        .onActionEnd((e: GestureEvent) => this.onPanelSwipe(e))
+    )
   }
 
   @Builder
@@ -1468,6 +1644,8 @@ export struct LiveRoomPage {
               .onChange((value: string) => { this.sleepInput = value; })
             Button('开始')
               .id('sleep_start')
+              .fontColor(C.onAccent)
+              .fontWeight(FontWeight.Bold)
               .constraintSize({ minHeight: 44 }).backgroundColor(C.accent)
               .onClick(() => {
                 const minutes = Number(this.sleepInput);
@@ -1519,7 +1697,6 @@ export struct LiveRoomPage {
     }
   }
 
-  /** Option cards are sized by their content; these are the list-based ones. */
   get sheetOptionCount(): number {
     switch (this.sheet) {
       case 'quality':
@@ -1553,9 +1730,10 @@ export struct LiveRoomPage {
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
-        // Page background on its own layer: it fades in under the travelling cover.
         Stack() {
-          AmbientGlow({ src: this.model.cover, glowHeight: this.rootH, strength: this.fullscreen ? 0 : 0.9 })
+          if (this.glowMounted) {
+            AmbientGlow({ src: this.model.cover, glowHeight: this.rootH, strength: this.fullscreen ? 0 : 0.72 })
+          }
         }
         .width('100%')
         .height('100%')
@@ -1563,22 +1741,50 @@ export struct LiveRoomPage {
         .opacity(this.bgFade)
 
         Stack({ alignContent: Alignment.TopStart }) {
-        this.infoBar()
+          if (this.chromeMounted) {
+            this.infoBar()
+          }
 
-        // the video morphs between its theater slot and the full window
-        Stack() {
-          this.videoStage()
-        }
-        .width(this.fullscreen ? this.rootW : this.slotW)
-        .height(this.fullscreen ? this.rootH : this.slotH)
-        .position({ x: this.fullscreen ? 0 : this.slotX, y: this.fullscreen ? 0 : this.topInset })
-        .borderRadius(this.fullscreen ? 0 : Radius.xl)
-        .shadow(this.fullscreen ? { radius: 0, color: Color.Transparent } :
-          { radius: 36, color: '#59000000', offsetY: 14 })
+          Stack() {
+            if (this.chromeMounted && !this.fullscreen) {
+              Row()
+                .width('100%')
+                .height('100%')
+                .backgroundColor(Color.Black)
+                .borderRadius(Radius.xl)
+                .shadow({ radius: 42, color: '#66000000', offsetY: 18 })
+                .renderGroup(true)
+                .hitTestBehavior(HitTestMode.None)
+            }
+            if (this.surfaceMounted) {
+              this.videoStage()
+            } else {
+              Image(this.model.cover)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+                .syncLoad(false)
+                .draggable(false)
+                .borderRadius(this.fullscreen ? 0 : Radius.xl)
+                .clip(true)
+            }
+          }
+          .width(this.fullscreen ? this.rootW : this.slotW)
+          .height(this.fullscreen ? this.rootH : this.slotH)
+          .position({ x: this.fullscreen ? 0 : this.slotX, y: this.fullscreen ? 0 : this.topInset })
+          .borderRadius(this.fullscreen ? 0 : Radius.xl)
+          // The shadow is cached separately above; native video and frosted controls are not.
+          // The return snapshot owns the moving picture. Keep the surface mounted, but do not
+          // repaint its cover, controls and large shadow behind that opaque snapshot.
+          .visibility(this.snapshotReturn ? Visibility.Hidden : Visibility.Visible)
 
-        this.theaterActions()
-        this.sidePanel()
-        this.sheetLayer()
+          if (this.chromeMounted) {
+            this.theaterActions()
+            this.sheetLayer()
+          }
+          if (this.panelMounted) {
+            this.sidePanel()
+          }
         }
         .width('100%')
         .height('100%')
@@ -1592,8 +1798,6 @@ export struct LiveRoomPage {
                 .height('100%')
                 .objectFit(ImageFit.Cover)
             } else {
-              // The card has already loaded this cover. Do not run another image fade inside
-              // the moving layer: that would invalidate its render cache throughout the morph.
               Image(this.morphCover)
                 .width('100%')
                 .height('100%')
@@ -1626,12 +1830,20 @@ export struct LiveRoomPage {
     }
     .hideTitleBar(true)
     .hideToolBar(true)
-    // Transparent: the page below stays visible while this room's background fades in and out.
     .backgroundColor(Color.Transparent)
     .onReady((ctx: NavDestinationContext) => this.onReady(ctx))
     .onShown(() => this.onRoomShown())
+    .onHidden(() => {
+      if ((!this.returnAnimating && !this.roomTransitioning) ||
+        (Nav.stack.getAllPathName().length > 0 && !Nav.isLiveOwner(this.playbackOwner))) {
+        this.releaseRootPresentation();
+      }
+    })
     .onBackPressed(() => this.onBack())
-    .onWillDisappear(() => this.disposeRoom('navigation'))
+    .onWillDisappear(() => {
+      if (!this.pipHandoff) this.holdRootPresentation();
+      this.disposeRoom('navigation');
+    })
     .customTransition((operation: NavigationOperation, isEnter: boolean) => this.roomTransition(operation, isEnter))
   }
 }

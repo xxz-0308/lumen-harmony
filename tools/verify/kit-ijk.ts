@@ -24,6 +24,10 @@ export class IjkMediaPlayer {
   url: string = '';
   volume: string = '';
   released: boolean = false;
+  releaseStarted: boolean = false;
+  stopError: Error | null = null;
+  stopWait: Promise<void> | null = null;
+  releaseWait: Promise<void> | null = null;
   prepared?: OnPreparedListener;
   info?: OnInfoListener;
   error?: OnErrorListener;
@@ -56,8 +60,17 @@ export class IjkMediaPlayer {
   pause(): void { ops.push(`pause:${this.url}`); }
   setVolume(left: string, _right: string): void { this.volume = left; }
   setSpeed(speed: string): void { ops.push(`speed:${speed}`); }
-  async stopAsync(): Promise<boolean> { ops.push(`stop:${this.url}`); return true; }
+  async stopAsync(): Promise<boolean> {
+    ops.push(`stop:${this.url}`);
+    await this.stopWait;
+    if (this.stopError !== null) {
+      throw this.stopError;
+    }
+    return true;
+  }
   async releaseAsync(): Promise<boolean> {
+    this.releaseStarted = true;
+    await this.releaseWait;
     this.released = true;
     ops.push(`release:${this.url}`);
     return true;

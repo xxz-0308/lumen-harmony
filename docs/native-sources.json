@@ -42,6 +42,6 @@
       "archive_sha256": "fa727ed1399a64e754030a033435003991aee36bda9a5b080995cb2ac5cf7f37"
     }
   ],
-  "native_source_asset": "Lumen-1.1.1-native-sources.tar.gz",
-  "native_source_asset_sha256": "f1a2e3b765d0013383471f0f93526bb2197502d18af7aae54d927c674eba60d9"
+  "native_source_asset": "Lumen-2.0.0-native-sources.tar.gz",
+  "native_source_asset_sha256": "c613f036d7c4f2066bc7dca4c4aaca7a068d3714cd609c472f4f754b14cdd338"
 }

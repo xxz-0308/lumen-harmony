@@ -5,6 +5,7 @@ import { LiveRoomItem, SiteId } from '../../entry/src/main/ets/core/model/Models
 
 Object.assign(globalThis, { ObservedV2: (value: unknown) => value, Trace: () => {} });
 const { HomeHeroState } = await import('../../entry/src/main/ets/views/HomeHeroState');
+const { SiteSwitch } = await import('../../entry/src/main/ets/views/SiteSwitch');
 const { RoomFeed } = await import('../../entry/src/main/ets/app/RoomFeed');
 const room = (site: SiteId, id: string, title = id) => LiveRoomItem.of(site, id, title, `${site}/${id}/${title}`, id, 1);
 const a = room('huya', '1'), b = room('douyu', '1'), c = room('bilibili', '1');
@@ -75,11 +76,12 @@ class Scroller {
 const settings = { homeSite: 'huya', scheduleSave() {} };
 const env = { winHeight: 700, foreground: true, reduceMotion: false };
 const followStore = { items: [] as any[], contentRevision: 0, subscribe() {}, unsubscribe() {}, refreshAll() {} };
-const Home = await logicStruct('../../../entry/src/main/ets/views/HomeView.ets', 'HomeView', '  @Builder\n  liveStrip()', {
-  Settings: { inst: settings }, AppEnv: { inst: env }, Sites: { ids }, Scroller, HomeHeroState, Motion: { snappy: 0 },
+const Home = await logicStruct('../../../entry/src/main/ets/views/HomeView.ets', 'HomeView', '  @Builder\n  topBar()', {
+  Settings: { inst: settings }, AppEnv: { inst: env }, Sites: { ids }, Scroller, HomeHeroState, SiteSwitch,
+  Motion: { snappy: 0 }, Space: { page: 24 },
   Feeds: { recommendOf: (id: SiteId) => cache.get(id) },
-  CategoryStore: { favorites: () => [], subscribeFavorites() {}, unsubscribeFavorites() {} },
-  FollowStore: { inst: followStore },
+  CategoryStore: { favorites: () => [], ensure() {}, of: () => ({ groups: [] }), subscribeFavorites() {}, unsubscribeFavorites() {} },
+  FollowStore: { inst: followStore }, NavigationActivity: { inst: { rootActive: true } },
   setTimeout: (fn: () => void) => { const id = ++nextTimer; timers.set(id, fn); return id; },
   clearTimeout: (id: number) => timers.delete(id)
 });
@@ -89,10 +91,14 @@ home.getUIContext = () => ({ animateTo: (options: { onFinish: () => void }, chan
   finishes.push(options.onFinish); change();
 } });
 home.aboutToAppear();
+assert.deepEqual(home.visitedSites, ['huya'], 'initial HomeView mounts only the active site RoomGrid');
+home.totalW = 400; assert.equal(home.narrowTopBar, true, '400vp window switches topBar into compact mode');
+home.totalW = 1280; assert.equal(home.narrowTopBar, false);
 assert.equal(home.siteOffset('huya'), 0); assert.equal(home.siteOffset('douyu'), 28); assert.equal(home.siteOffset('bilibili'), 28);
 const commonKeys = home.heroItems.map(HomeHeroState.key);
 home.outerScroller.y = 140; home.onListScroll('huya', 321);
 home.selectSite(1);
+assert.deepEqual(home.visitedSites, ['huya', 'douyu']);
 assert.equal(home.alignY, 321); assert.equal(home.outerScroller.y, 140);
 assert.deepEqual(home.heroItems.map(HomeHeroState.key), commonKeys, 'platform choice does not change the common fallback');
 home.onListScroll('huya', 900); assert.equal(home.listY, 321, 'outgoing lists cannot replace the shared offset');
@@ -100,6 +106,7 @@ home.onListScroll('douyu', 275); home.selectSite(2);
 assert.equal(home.alignY, 275); home.selectSite(0);
 assert.equal(home.alignY, 275); assert.equal(home.site, 'huya'); assert.equal(timers.size, 0);
 assert.deepEqual(home.drawnSites, ids);
+assert.deepEqual(home.visitedSites, ids);
 finishes[0](); finishes[1]();
 assert.deepEqual(home.drawnSites, ids, 'old animation completions cannot hide the newest outgoing/incoming layers');
 finishes[2](); assert.deepEqual(home.drawnSites, ['huya']);
@@ -123,22 +130,35 @@ retainedHome.syncFollows(); assert.equal(retainedHome.followSnapshot, snapshot, 
 retainedHome.heroVisible = false; assert.equal(retainedHome.heroActive, false);
 retainedHome.heroVisible = true; assert.equal(retainedHome.heroActive, true);
 retainedHome.active = false; retainedHome.onActive();
-followStore.items = [{ isLive: true, online: 1, toRoomItem: () => a }]; followStore.contentRevision++;
+followStore.items = [{ isLive: true, online: 1, toRoomItem: () => a,
+  snapshot: () => ({ isLive: true, online: 1, toRoomItem: () => a }) }]; followStore.contentRevision++;
 retainedHome.syncFollows(); assert.equal(retainedHome.followSnapshot, snapshot, 'hidden Home defers snapshot publication');
 retainedHome.active = true; retainedHome.onActive(); assert.equal(retainedHome.followSnapshot.length, 1);
-assert.equal(retainedHome.heroItems[0], a); retainedHome.aboutToDisappear();
+assert.equal(retainedHome.heroItems[0], a);
+const beforeNavigation = retainedHome.followSnapshot;
+retainedHome.navActivity.rootActive = false;retainedHome.onActive();followStore.contentRevision++;
+retainedHome.syncFollows();
+assert.equal(retainedHome.followSnapshot, beforeNavigation, 'navigation gate blocks publication even if retained builder active Param is stale');
+assert.equal(retainedHome.heroActive, false, 'retained HDS hero autoplay stops directly on navigation intent');
+retainedHome.navActivity.rootActive = true;retainedHome.onActive();
+assert.notEqual(retainedHome.followSnapshot, beforeNavigation);
+retainedHome.aboutToDisappear();
 
 const covers: string[] = [];
 const HeroView = await logicStruct('../../../entry/src/main/ets/views/HomeHero.ets', 'HomeHero', '  @Builder\n  placeholder()', {
-  HomeHeroState, TouchType: { Down: 1, Up: 2, Cancel: 3 },
+  HomeHeroState, SwiperController: class {}, TouchType: { Down: 1, Up: 2, Cancel: 3 },
   setTimeout: (fn: () => void) => { const id = ++nextTimer; timers.set(id, fn); return id; },
   clearTimeout: (id: number) => timers.delete(id)
 });
 const heroView = new HeroView(); heroView.active = true; heroView.items = [a, b];
 heroView.onCover = (cover: string) => covers.push(cover); heroView.aboutToAppear();
 const nativeChange = heroView.changeHandler(heroView.state.generation);
+const staleEnd = heroView.endHandler(heroView.state.generation);
+heroView.items = [b, c]; heroView.onSource();
+staleEnd(1);
+assert.equal(heroView.state.index, 0, 'stale onAnimationEnd callback from prior generation cannot overwrite reordered index');
 heroView.touch({ type: 1 }); heroView.items = [c]; heroView.onSource();
-assert.equal(heroView.state.slides[0].item, a);
+assert.equal(heroView.state.slides[0].item, b);
 heroView.touch({ type: 2 }); assert.equal(timers.size, 1);
 heroView.aboutToDisappear(); const coverCount = covers.length;
 assert.equal(timers.size, 0); nativeChange(1); heroView.touch({ type: 2 });
@@ -157,4 +177,7 @@ assert.equal((homeSrc.match(/HomeHero\(\{/g) ?? []).length, 1);
 assert.equal(homeSrc.includes('Swiper()'), false);
 const heroSrc = readFileSync(new URL('../../../entry/src/main/ets/views/HomeHero.ets', import.meta.url), 'utf-8');
 assert.equal(heroSrc.includes('.clip(false)'), false, 'adjacent hero slides cannot draw into the common page gutter');
+assert.equal(heroSrc.includes('.index(this.state.index)'), true, 'Swiper binds to HomeHeroState.index');
+assert.equal(heroSrc.includes('Settings.inst.heroAutoPlay'), true, 'Swiper autoPlay respects Settings.inst.heroAutoPlay');
+assert.equal(heroSrc.includes('暂时没有推荐直播'), true, 'HomeHero distinguishes empty state from loading');
 console.log('Home: common hero identity, stale proxy rejection, cached site switching and shared offset passed');

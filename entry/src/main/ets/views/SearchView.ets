@@ -133,22 +133,19 @@ export struct SearchView {
         }
       }
       .width('100%')
-      .height(56)
+      .height(54)
       .padding({ left: 18, right: 16 })
       .borderRadius(Radius.pill)
-      .backgroundColor(C.bgElevated)
-      .borderWidth(1.5)
-      .borderColor(this.focused ? C.accent : C.stroke)
-      .shadow(this.focused ? { radius: 24, color: C.accentGlow, offsetY: 6 } : { radius: 12, color: '#14000000', offsetY: 4 })
+      .backgroundColor(C.surface2)
       .animation({ curve: Motion.snappy })
 
       Row({ space: 12 }) {
         Button('搜索', { type: ButtonType.Normal })
           .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Color.White)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(C.onAccent)
           .height(48)
-          .padding({ left: 20, right: 20 })
+          .padding({ left: 22, right: 22 })
           .borderRadius(Radius.pill)
           .backgroundColor(C.accent)
           .enabled(this.input.trim().length > 0)

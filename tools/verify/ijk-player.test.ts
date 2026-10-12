@@ -139,6 +139,117 @@ assert.equal(latest().released, true);
 latest().emitError(-1);
 assert.equal(player.state, PlayState.Idle);
 
+// A rejected stop must still attempt release, and the next setup waits for release completion.
+mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+try {
+  const rejecting = new IjkLivePlayer();
+  rejecting.bindNative(ctx, 'video_reject');
+  await rejecting.open(['https://reject.test/old.flv'], {});
+  const retiring = latest();
+  retiring.stopError = new Error('injected stop rejection');
+  let finishRelease!: () => void;
+  retiring.releaseWait = new Promise<void>((resolve) => { finishRelease = resolve; });
+  ops.length = 0;
+  const count = players.length;
+  const switching = rejecting.open(['https://reject.test/new.flv'], {});
+  await tick();
+  assert.equal(retiring.releaseStarted, true, 'stop rejection does not skip releaseAsync');
+  assert.equal(retiring.released, false, 'native release is still pending');
+  assert.equal(players.length, count, 'replacement setup waits even after stop rejects');
+  finishRelease();
+  await switching;
+  assert.equal(retiring.released, true);
+  assert.deepEqual(ops.filter((op: string) => op.startsWith('release:') || op.startsWith('setup:')),
+    ['release:https://reject.test/old.flv', 'setup:video_reject:1']);
+  assert.equal(latest().url, 'https://reject.test/new.flv');
+  retiring.emitInfo(RENDER);
+  retiring.emitError(-1);
+  assert.equal(rejecting.firstFrame, false, 'retiring callbacks cannot update the replacement');
+  assert.equal(rejecting.state, PlayState.Loading);
+  rejecting.release();
+  await tick();
+
+  // Rebinding either the same ID or a new ID during detached teardown preserves the selected line.
+  for (const reboundId of ['video_handoff', 'video_handoff_new']) {
+    const handoff = new IjkLivePlayer();
+    handoff.bindNative(ctx, 'video_handoff');
+    await handoff.open(['https://handoff.test/old.flv'], {});
+    const oldNative = latest();
+    let finishStop!: () => void;
+    let finishHandoffRelease!: () => void;
+    oldNative.stopWait = new Promise<void>((resolve) => { finishStop = resolve; });
+    oldNative.releaseWait = new Promise<void>((resolve) => { finishHandoffRelease = resolve; });
+    ops.length = 0;
+    const before = players.length;
+    const pending = handoff.open(['https://handoff.test/unused.flv', 'https://handoff.test/new.flv'], {}, 1);
+    await tick();
+    assert.ok(ops.includes('stop:https://handoff.test/old.flv'));
+    handoff.unbindNative('video_handoff');
+    handoff.unbindNative('video_handoff');
+    const nextContext = {};
+    handoff.bindNative(nextContext, reboundId);
+    await tick();
+    assert.equal(players.length, before, 'rebind cannot overtake pending stop');
+    finishStop();
+    await tick();
+    assert.equal(oldNative.releaseStarted, true);
+    assert.equal(players.length, before, 'rebind cannot overtake pending release');
+    finishHandoffRelease();
+    await pending;
+    await tick();
+    assert.equal(oldNative.released, true);
+    assert.equal(players.length, before + 1, 'cancelled setup is replaced by exactly one reopen');
+    const reopened = latest();
+    assert.equal(reopened.id, reboundId);
+    assert.equal(reopened.url, 'https://handoff.test/new.flv', 'reopen keeps the newest selected line');
+    assert.deepEqual(ops.filter((op: string) => op.startsWith('release:') || op.startsWith('setup:')),
+      ['release:https://handoff.test/old.flv', `setup:${reboundId}:1`]);
+    oldNative.emitPrepared();
+    oldNative.emitInfo(RENDER);
+    assert.equal(handoff.firstFrame, false);
+    assert.equal(handoff.state, PlayState.Loading);
+    reopened.emitPrepared();
+    reopened.emitInfo(RENDER);
+    assert.equal(handoff.state, PlayState.Playing);
+    handoff.bindNative(nextContext, reboundId);
+    await tick();
+    assert.equal(latest(), reopened, 'duplicate bind does not reopen a healthy player');
+    handoff.release();
+    await tick();
+  }
+
+  // Explicit stop/disposal still cancels retained reopen intent while teardown is pending.
+  for (const dispose of [false, true]) {
+    const cancelled = new IjkLivePlayer();
+    cancelled.bindNative(ctx, 'video_cancel');
+    await cancelled.open(['https://cancel.test/old.flv'], {});
+    const oldNative = latest();
+    let finishStop!: () => void;
+    oldNative.stopWait = new Promise<void>((resolve) => { finishStop = resolve; });
+    const before = players.length;
+    const pending = cancelled.open(['https://cancel.test/new.flv'], {});
+    await tick();
+    cancelled.unbindNative('video_cancel');
+    if (dispose) {
+      cancelled.release();
+    } else {
+      cancelled.stop();
+    }
+    cancelled.bindNative({}, 'video_cancel_new');
+    finishStop();
+    await pending;
+    await tick();
+    assert.equal(oldNative.released, true);
+    assert.equal(players.length, before, 'stop/release must not resurrect cancelled playback on rebind');
+    assert.equal(cancelled.state, PlayState.Idle);
+    assert.equal(cancelled.wantsPlayback, false);
+    cancelled.release();
+    await tick();
+  }
+} finally {
+  mock.timers.reset();
+}
+
 // Stall watchdog and gentle latency catch-up use timers.
 mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
 try {
@@ -211,5 +322,5 @@ try {
 }
 
 console.log('IjkLivePlayer: pending surface, options, buffering states, ordered release, stale callbacks, failover, ' +
-  'completion, seamless reopen, pause/resume, surface rebinding, audio focus, stall/start timeouts and ' +
-  'gentle catch-up, long-pause release passed');
+  'completion, seamless reopen, pause/resume, surface rebinding, rejected-stop cleanup, delayed handoff rebind, ' +
+  'cancelled reopen, audio focus, stall/start timeouts, gentle catch-up and long-pause release passed');

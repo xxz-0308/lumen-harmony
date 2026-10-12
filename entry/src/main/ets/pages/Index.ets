@@ -2,6 +2,7 @@ import { AppEnv } from '../app/AppEnv';
 import { Settings } from '../app/Settings';
 import { FollowStore } from '../app/Stores';
 import { LiveRouteParam, Nav, Routes } from '../app/Nav';
+import { NavigationActivity } from '../app/NavigationActivity';
 import { C, Layout, Motion } from '../theme/Theme';
 import { BottomNav } from '../components/BottomNav';
 import { MainTabs, hasHdsTabs } from '../components/MainTabs';
@@ -52,7 +53,7 @@ struct SectionHost {
 struct Index {
   @Local section: string = Settings.inst.startPage === 'history' ? 'mine' : Settings.inst.startPage;
   @Local visited: string[] = [Settings.inst.startPage === 'history' ? 'mine' : Settings.inst.startPage];
-  @Local rootShown: boolean = true;
+  @Local navActivity: NavigationActivity = NavigationActivity.inst;
   @Local env: AppEnv = AppEnv.inst;
   private useHds: boolean = hasHdsTabs();
   private legacyHistoryPending: boolean = Settings.inst.startPage === 'history';
@@ -67,9 +68,9 @@ struct Index {
     Nav.openHistory();
   }
 
-  @Monitor('rootShown', 'env.foreground')
+  @Monitor('navActivity.rootActive', 'env.foreground')
   onRootActivity(): void {
-    if (!this.mounted || !this.rootShown || !this.env.foreground) return;
+    if (!this.mounted || !this.navActivity.rootActive || !this.env.foreground) return;
     if (Date.now() - FollowStore.inst.lastRefreshAt >= Index.FOLLOW_REFRESH_MS) {
       FollowStore.inst.refreshAll();
     }
@@ -79,7 +80,7 @@ struct Index {
     this.mounted = true;
     this.onRootActivity();
     this.refreshTimer = setInterval(() => {
-      if (this.mounted && this.rootShown && this.env.foreground) FollowStore.inst.refreshAll();
+      if (this.mounted && this.navActivity.rootActive && this.env.foreground) FollowStore.inst.refreshAll();
     }, Index.FOLLOW_REFRESH_MS);
   }
 
@@ -114,23 +115,23 @@ struct Index {
   sectionContent(key: string) {
     if (key === 'home' && this.visited.indexOf('home') >= 0) {
       SectionHost({ active: this.section === 'home' }) {
-        HomeView({ active: this.section === 'home' && this.rootShown && this.env.foreground,
+        HomeView({ active: this.section === 'home' && this.navActivity.rootActive && this.env.foreground,
           onSeeFollows: () => this.select('follow'), onSeeCategories: () => this.select('category') })
       }
     }
     if (key === 'category' && this.visited.indexOf('category') >= 0) {
       SectionHost({ active: this.section === 'category' }) {
-        CategoryView({ active: this.section === 'category' && this.rootShown && this.env.foreground })
+        CategoryView({ active: this.section === 'category' && this.navActivity.rootActive && this.env.foreground })
       }
     }
     if (key === 'follow' && this.visited.indexOf('follow') >= 0) {
       SectionHost({ active: this.section === 'follow' }) {
-        FollowView({ active: this.section === 'follow' && this.rootShown && this.env.foreground })
+        FollowView({ active: this.section === 'follow' && this.navActivity.rootActive && this.env.foreground })
       }
     }
     if (key === 'mine' && this.visited.indexOf('mine') >= 0) {
       SectionHost({ active: this.section === 'mine' }) {
-        MineView()
+        MineView({ active: this.section === 'mine' && this.navActivity.rootActive && this.env.foreground })
       }
     }
   }
@@ -169,7 +170,10 @@ struct Index {
     .hideToolBar(true)
     .hideBackButton(true)
     .navDestination(this.pageMap)
-    .onNavBarStateChange((visible: boolean) => { this.rootShown = visible; })
+    .onNavBarStateChange((visible: boolean) => {
+      // Transparent room transitions can report the underlying nav bar as visible mid-push.
+      this.navActivity.setRootVisible(visible, Nav.stack.getAllPathName().length > 0);
+    })
     .onAppear(() => this.restoreLegacyStart())
     .backgroundColor(C.bg)
     .width('100%')

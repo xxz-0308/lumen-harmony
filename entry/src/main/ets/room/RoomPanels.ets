@@ -1,5 +1,6 @@
 import { ChatLine, RoomModel, ScCard } from './RoomModel';
 import { FollowItem, FollowStore } from '../app/Stores';
+import { AppEnv } from '../app/AppEnv';
 import { Settings, DanmakuStroke } from '../app/Settings';
 import { argb, C, formatDuration, formatOnline, Motion, Radius, SiteStyle } from '../theme/Theme';
 import { Avatar, NetImage, Segmented, SiteBadge } from '../components/Basics';
@@ -124,7 +125,7 @@ export struct ChatList {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      List({ scroller: this.scroller, space: 2 }) {
+      List({ scroller: this.scroller, space: 12 }) {
         if (this.model.superChats.length > 0) {
           ListItem() {
             List({ space: 8 }) {
@@ -145,7 +146,7 @@ export struct ChatList {
           ListItem() {
             Text(this.model.danmakuStatus.length > 0 ? this.model.danmakuStatus :
               (this.model.blockedChats > 0 ? `已屏蔽 ${this.model.blockedChats} 条弹幕，请检查屏蔽词` :
-                (this.model.danmakuConnected ? '已连接，暂无弹幕' : '弹幕连接中…')))
+                (this.model.danmakuConnected ? '已连接，等待弹幕飘过…' : '弹幕连接中…')))
               .fontSize(13)
               .fontColor(C.text3)
               .width('100%')
@@ -156,22 +157,22 @@ export struct ChatList {
         ForEach(this.model.chats, (line: ChatLine) => {
           ListItem() {
             Text() {
-              Span(line.user)
+              Span(`${line.user}  `)
                 .fontColor(C.text3)
-              Span('  ')
+                .fontWeight(FontWeight.Bold)
               Span(line.text)
                 .fontColor(chatColor(line.color, this.dark).length > 0 ? chatColor(line.color, this.dark) : C.text1)
+                .fontWeight(FontWeight.Medium)
             }
             .fontSize(14)
-            .lineHeight(21)
-            .padding({ top: 4, bottom: 4 })
+            .lineHeight(22)
             .width('100%')
           }
         }, (line: ChatLine) => `${line.id}`)
       }
       .width('100%')
       .height('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .padding({ left: 12, right: 16, top: 18, bottom: 20 })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .onScrollStart(() => {
@@ -186,16 +187,17 @@ export struct ChatList {
         Row({ space: 4 }) {
           SymbolGlyph($r('sys.symbol.chevron_down'))
             .fontSize(13)
-            .fontColor([Color.White])
+            .fontColor([C.onAccent])
           Text(`${this.unseen > 99 ? '99+' : this.unseen} 条新弹幕`)
             .fontSize(12)
-            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(C.onAccent)
         }
-        .padding({ left: 12, right: 14, top: 7, bottom: 7 })
+        .padding({ left: 14, right: 16, top: 7, bottom: 7 })
         .borderRadius(Radius.pill)
         .backgroundColor(C.accent)
         .shadow({ radius: 12, color: '#40000000', offsetY: 3 })
-        .margin({ bottom: 14 })
+        .margin({ bottom: 18 })
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 10 }))
           .animation({ curve: Motion.lively }))
         .onClick(() => {
@@ -440,6 +442,8 @@ export struct DanmakuSettingsPanel {
   @Param embedded: boolean = false;
   @Event onChange: () => void = () => {};
   private s: Settings = Settings.inst;
+  @Local accentColor: string = C.accent;
+  @Local themeKey: string = `${AppEnv.inst.isDark}_${Settings.inst.accentPalette}`;
   @Local danmakuOn: boolean = Settings.inst.danmakuOn;
   @Local dmSize: number = Settings.inst.danmakuSize;
   @Local dmOpacity: number = Settings.inst.danmakuOpacity;
@@ -450,8 +454,15 @@ export struct DanmakuSettingsPanel {
   @Local keepColor: boolean = Settings.inst.danmakuKeepColor;
   @Local sideChat: boolean = Settings.inst.sideChat;
   @Local showSuperChat: boolean = Settings.inst.showSuperChat;
+  private syncTheme: () => void = () => {
+    this.accentColor = C.accent;
+    this.themeKey = `${AppEnv.inst.isDark}_${this.s.accentPalette}`;
+  };
 
   aboutToAppear(): void {
+    this.s.subscribeTheme(this.syncTheme);
+    AppEnv.inst.subscribeDark(this.syncTheme);
+    this.syncTheme();
     this.danmakuOn = this.s.danmakuOn;
     this.dmSize = this.s.danmakuSize;
     this.dmOpacity = this.s.danmakuOpacity;
@@ -464,6 +475,11 @@ export struct DanmakuSettingsPanel {
     this.showSuperChat = this.s.showSuperChat;
   }
 
+  aboutToDisappear(): void {
+    this.s.unsubscribeTheme(this.syncTheme);
+    AppEnv.inst.unsubscribeDark(this.syncTheme);
+  }
+
   @Builder
   toggle(label: string, on: boolean, change: (v: boolean) => void) {
     Row() {
@@ -471,13 +487,17 @@ export struct DanmakuSettingsPanel {
         .fontSize(14)
         .fontColor(this.onMedia ? C.onMedia : C.text1)
       Blank()
-      Toggle({ type: ToggleType.Switch, isOn: on })
-        .selectedColor(C.accent)
-        .onChange((v: boolean) => {
-          change(v);
-          this.s.scheduleSave();
-          this.onChange();
-        })
+      Stack() {
+        ForEach([this.themeKey], (_tk: string) => {
+          Toggle({ type: ToggleType.Switch, isOn: on })
+            .selectedColor(this.accentColor)
+            .onChange((v: boolean) => {
+              change(v);
+              this.s.scheduleSave();
+              this.onChange();
+            })
+        }, (tk: string) => tk)
+      }
     }
     .width('100%')
   }
@@ -504,44 +524,52 @@ export struct DanmakuSettingsPanel {
           this.s.danmakuOn = v;
         })
         SettingRow({ onMedia: this.onMedia, label: '字号', value: `${this.dmSize}` }) {
-          Slider({ value: this.dmSize, min: 14, max: 36, step: 1 })
-            .selectedColor(C.accent)
-            .onChange((v: number) => {
-              this.dmSize = Math.round(v);
-              this.s.danmakuSize = this.dmSize;
-              this.s.scheduleSave();
-              this.onChange();
-            })
+          ForEach([this.themeKey], (_tk: string) => {
+            Slider({ value: this.dmSize, min: 14, max: 36, step: 1 })
+              .selectedColor(this.accentColor)
+              .onChange((v: number) => {
+                this.dmSize = Math.round(v);
+                this.s.danmakuSize = this.dmSize;
+                this.s.scheduleSave();
+                this.onChange();
+              })
+          }, (tk: string) => tk)
         }
         SettingRow({ onMedia: this.onMedia, label: '不透明度', value: `${Math.round(this.dmOpacity * 100)}%` }) {
-          Slider({ value: this.dmOpacity * 100, min: 20, max: 100, step: 5 })
-            .selectedColor(C.accent)
-            .onChange((v: number) => {
-              this.dmOpacity = v / 100;
-              this.s.danmakuOpacity = this.dmOpacity;
-              this.s.scheduleSave();
-              this.onChange();
-            })
+          ForEach([this.themeKey], (_tk: string) => {
+            Slider({ value: this.dmOpacity * 100, min: 20, max: 100, step: 5 })
+              .selectedColor(this.accentColor)
+              .onChange((v: number) => {
+                this.dmOpacity = v / 100;
+                this.s.danmakuOpacity = this.dmOpacity;
+                this.s.scheduleSave();
+                this.onChange();
+              })
+          }, (tk: string) => tk)
         }
         SettingRow({ onMedia: this.onMedia, label: '速度', value: `${this.speed.toFixed(1)}x` }) {
-          Slider({ value: this.speed * 10, min: 5, max: 20, step: 1 })
-            .selectedColor(C.accent)
-            .onChange((v: number) => {
-              this.speed = v / 10;
-              this.s.danmakuSpeed = this.speed;
-              this.s.scheduleSave();
-              this.onChange();
-            })
+          ForEach([this.themeKey], (_tk: string) => {
+            Slider({ value: this.speed * 10, min: 5, max: 20, step: 1 })
+              .selectedColor(this.accentColor)
+              .onChange((v: number) => {
+                this.speed = v / 10;
+                this.s.danmakuSpeed = this.speed;
+                this.s.scheduleSave();
+                this.onChange();
+              })
+          }, (tk: string) => tk)
         }
         SettingRow({ onMedia: this.onMedia, label: '同屏上限', value: `${this.max} 条` }) {
-          Slider({ value: this.max, min: 20, max: 150, step: 10 })
-            .selectedColor(C.accent)
-            .onChange((v: number) => {
-              this.max = Math.round(v);
-              this.s.danmakuMax = this.max;
-              this.s.scheduleSave();
-              this.onChange();
-            })
+          ForEach([this.themeKey], (_tk: string) => {
+            Slider({ value: this.max, min: 20, max: 150, step: 10 })
+              .selectedColor(this.accentColor)
+              .onChange((v: number) => {
+                this.max = Math.round(v);
+                this.s.danmakuMax = this.max;
+                this.s.scheduleSave();
+                this.onChange();
+              })
+          }, (tk: string) => tk)
         }
         SettingRow({ onMedia: this.onMedia, label: '显示区域', value: '' }) {
           Segmented({

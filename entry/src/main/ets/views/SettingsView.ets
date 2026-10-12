@@ -42,11 +42,9 @@ struct SettingsCard {
         this.content()
       }
       .width('100%')
-      .padding(20)
+      .padding(22)
       .borderRadius(Radius.xl)
-      .backgroundColor(C.bgElevated)
-      .borderWidth(1)
-      .borderColor(C.stroke)
+      .backgroundColor(C.surface)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -93,6 +91,11 @@ export struct SettingsView {
   @Local s: Settings = Settings.inst;
   @Local appearanceMode: ThemeMode = Settings.inst.themeMode;
   @Local appearancePalette: AccentPalette = Settings.inst.accentPalette;
+  @Local accentColor: string = C.accent;
+  @Local accentSoftColor: string = C.accentSoft;
+  @Local onAccentColor: string = C.onAccent;
+  @Local accentHiColor: string = C.accentHighlight;
+  @Local themeKey: string = `${AppEnv.inst.isDark}_${Settings.inst.accentPalette}`;
   @Local displayedStartPage: StartPage = Settings.inst.startPage;
   @Local displayedFill: boolean = Settings.inst.videoFill;
   @Local displayedVolumeMode: VolumeMode = Settings.inst.volumeMode;
@@ -102,6 +105,15 @@ export struct SettingsView {
   @Local displayedWords: string[] = Settings.inst.blockWords.slice();
   @Local areaW: number = AppEnv.inst.winWidth;
   @Local storageMessage: string = Settings.inst.storageError;
+  private syncTheme: () => void = () => {
+    this.appearanceMode = this.s.themeMode;
+    this.appearancePalette = this.s.accentPalette;
+    this.accentColor = C.accent;
+    this.accentSoftColor = C.accentSoft;
+    this.onAccentColor = C.onAccent;
+    this.accentHiColor = C.accentHighlight;
+    this.themeKey = `${this.env.isDark}_${this.s.accentPalette}`;
+  };
   private syncStorage: () => void = () => {
     this.storageMessage = this.s.storageError;
   };
@@ -141,8 +153,7 @@ export struct SettingsView {
     if (!this.active) {
       this.stopQr();
     } else {
-      this.appearanceMode = this.s.themeMode;
-      this.appearancePalette = this.s.accentPalette;
+      this.syncTheme();
       this.displayedStartPage = this.s.startPage;
       this.displayedFill = this.s.videoFill;
       this.displayedVolumeMode = this.s.volumeMode;
@@ -156,14 +167,19 @@ export struct SettingsView {
 
   aboutToAppear(): void {
     this.env.subscribeForeground(this.foregroundListener);
+    this.env.subscribeDark(this.syncTheme);
+    this.s.subscribeTheme(this.syncTheme);
     this.s.subscribeStorage(this.syncStorage);
     this.s.subscribeAccount(this.syncAccount);
+    this.syncTheme();
     this.syncStorage();
     this.syncAccount();
   }
 
   aboutToDisappear(): void {
     this.env.unsubscribeForeground(this.foregroundListener);
+    this.env.unsubscribeDark(this.syncTheme);
+    this.s.unsubscribeTheme(this.syncTheme);
     this.s.unsubscribeStorage(this.syncStorage);
     this.s.unsubscribeAccount(this.syncAccount);
     this.stopQr();
@@ -278,13 +294,17 @@ export struct SettingsView {
 
   @Builder
   toggle(on: boolean, change: (v: boolean) => void) {
-    Toggle({ type: ToggleType.Switch, isOn: on })
-      .selectedColor(C.accent)
-      .onChange((v: boolean) => {
-        change(v);
-        this.s.scheduleSave();
-        this.storageMessage = this.s.storageError;
-      })
+    Stack() {
+      ForEach([this.themeKey], (_tk: string) => {
+        Toggle({ type: ToggleType.Switch, isOn: on })
+          .selectedColor(this.accentColor)
+          .onChange((v: boolean) => {
+            change(v);
+            this.s.scheduleSave();
+            this.storageMessage = this.s.storageError;
+          })
+      }, (tk: string) => tk)
+    }
   }
 
   @Builder
@@ -298,19 +318,23 @@ export struct SettingsView {
           this.appearanceMode = i as ThemeMode;
           this.s.themeMode = this.appearanceMode;
           this.env.setThemeMode(this.appearanceMode);
-          this.s.flush().catch(() => Log.w('settings', 'Could not save theme mode'));
+          this.s.publishTheme();
+          this.s.scheduleSave();
         }
       })
     }
     SettingItem({ title: '主题色', desc: '界面强调色，可随时切换' }) {
       Segmented({
-        items: ['暖橙', '海蓝', '薄荷', '兰紫'],
+        items: ['钛白', '海蓝', '薄荷', '兰紫'],
         selected: ['ember', 'ocean', 'mint', 'orchid'].indexOf(this.appearancePalette),
-        segmentWidth: 48,
+        segmentWidth: 68,
+        pillColor: this.accentColor,
+        activeTextColor: this.onAccentColor,
         onSelect: (i: number) => {
           this.appearancePalette = ['ember', 'ocean', 'mint', 'orchid'][i] as AccentPalette;
           this.s.accentPalette = this.appearancePalette;
-          this.s.flush().catch(() => Log.w('settings', 'Could not save accent color'));
+          this.s.publishTheme();
+          this.s.scheduleSave();
         }
       })
     }
@@ -319,7 +343,7 @@ export struct SettingsView {
         items: ['首页', '分类', '关注', '我的'],
         selected: ['home', 'category', 'follow', 'mine'].indexOf(
           this.displayedStartPage === 'history' ? 'mine' : this.displayedStartPage),
-        segmentWidth: 48,
+        segmentWidth: 68,
         onSelect: (i: number) => {
           this.displayedStartPage = ['home', 'category', 'follow', 'mine'][i] as StartPage;
           this.s.startPage = this.displayedStartPage;
@@ -433,17 +457,18 @@ export struct SettingsView {
           .onSubmit(() => this.addBlock())
         Text('添加')
           .fontSize(14)
-          .fontColor(Color.White)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.onAccentColor)
           .height(40)
           .padding({ left: 18, right: 18 })
           .borderRadius(Radius.pill)
-          .backgroundColor(C.accent)
+          .backgroundColor(this.accentColor)
           .onClick(() => this.addBlock())
       }
       if (this.displayedWords.some((w: string) => broadBlockWord(w))) {
         Text('有屏蔽规则会拦截几乎所有弹幕，连接正常时聊天也可能为空')
           .fontSize(12)
-          .fontColor(C.accent)
+          .fontColor(this.accentColor)
       }
       if (this.displayedWords.length > 0) {
         Flex({ wrap: FlexWrap.Wrap }) {
@@ -494,16 +519,16 @@ export struct SettingsView {
       SettingItem({ title: '哔哩哔哩', desc: `已登录：${this.accountName || '用户 ' + this.accountUid}` }) {
         Button('退出登录', { type: ButtonType.Normal })
           .height(Layout.touchTarget)
-          .backgroundColor(C.accentSoft)
+          .backgroundColor(this.accentSoftColor)
           .borderRadius(Radius.pill)
           .fontSize(14)
-          .fontColor(C.accent)
+          .fontColor(this.accentColor)
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .onClick(() => {
             promptAction.showDialog({
               title: '退出哔哩哔哩账号？',
               message: '此设备将不再使用当前账号播放直播',
-              buttons: [{ text: '取消', color: '#99999999' }, { text: '退出', color: C.accentHighlight }]
+              buttons: [{ text: '取消', color: '#99999999' }, { text: '退出', color: this.accentHiColor }]
             }).then((r: promptAction.ShowDialogSuccessResponse) => {
               if (r.index === 1) {
                 this.signOut();
@@ -520,10 +545,10 @@ export struct SettingsView {
         Button(this.qrUrl ? '刷新二维码' : '扫码登录', { type: ButtonType.Normal })
           .height(Layout.touchTarget)
           .enabled(!this.qrBusy)
-          .backgroundColor(C.accentSoft)
+          .backgroundColor(this.accentSoftColor)
           .borderRadius(Radius.pill)
           .fontSize(14)
-          .fontColor(C.accent)
+          .fontColor(this.accentColor)
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
           .onClick(() => {
             if (!this.qrBusy) {
@@ -560,14 +585,14 @@ export struct SettingsView {
     SettingItem({ title: '清空观看历史', desc: `${HistoryStore.inst.items.length} 条记录` }) {
       Text('清空')
         .fontSize(14)
-        .fontColor(C.accent)
+        .fontColor(this.accentColor)
         .height(40)
         .padding({ left: 12, right: 12 })
         .onClick(() => {
           promptAction.showDialog({
             title: '清空观看历史？',
             message: '此操作无法撤销',
-            buttons: [{ text: '取消', color: '#99999999' }, { text: '清空', color: C.accentHighlight }]
+            buttons: [{ text: '取消', color: '#99999999' }, { text: '清空', color: this.accentHiColor }]
           }).then((r: promptAction.ShowDialogSuccessResponse) => {
             if (r.index === 1) {
               HistoryStore.inst.clear();
@@ -580,7 +605,7 @@ export struct SettingsView {
     SettingItem({ title: '清空搜索记录', desc: '' }) {
       Text('清空')
         .fontSize(14)
-        .fontColor(C.accent)
+        .fontColor(this.accentColor)
         .height(40)
         .padding({ left: 12, right: 12 })
         .onClick(() => {
@@ -601,7 +626,7 @@ export struct SettingsView {
               .fontColor(C.live)
             Text('重试')
               .fontSize(14)
-              .fontColor(C.accent)
+              .fontColor(this.accentColor)
               .height(40)
               .padding({ left: 12, right: 12 })
               .onClick(() => {
@@ -639,8 +664,8 @@ export struct SettingsView {
               .width(10)
               .height(10)
               .borderRadius(5)
-              .linearGradient({ angle: 135, colors: [['#FFE1B8', 0], [C.accentHighlight, 1]] })
-            Text('Lumen 1.0')
+              .linearGradient({ angle: 135, colors: [['#FFE1B8', 0], [this.accentHiColor, 1]] })
+            Text('Lumen 2.0')
               .fontSize(14)
               .fontWeight(FontWeight.Bold)
               .fontColor(C.text2)

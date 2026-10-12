@@ -86,4 +86,73 @@ await queued.refreshAll(true);await flush();assert.deepEqual(getTestPreferenceSt
 setTestPreference(name,'list','[]');const anchor=new FollowStore();anchor.load({} as never);resetTestPreferenceStats(name);
 anchor.followAnchor('huya','anchor','placeholder','',false);await flush();
 assert.equal(JSON.parse(getTestPreference(name,'list')!)[0].userName,'fixture','standalone detail changes are included in the subsequent saved snapshot');
-console.log('FollowStore: revisions, progressive refresh, throttle, unchanged/transient zero-write, persisted fields, failure retry, serial in-flight edits and standalone details passed');
+
+// Issue 2 regression: batch refreshAll must never overwrite a newer detail written concurrently by updateFromDetail
+setTestPreference(name, 'list', JSON.stringify([
+  { siteId: 'huya', roomId: 'roomA', userName: 'AnchorA', avatar: '', addTime: 10 },
+  { siteId: 'huya', roomId: 'roomB', userName: 'AnchorB', avatar: '', addTime: 20 }
+]));
+const raceStore = new FollowStore(); raceStore.load({} as never);
+const pendingDetails = new Map<string, (d: LiveRoomDetail) => void>();
+Sites.huya.getRoomDetail = (id: string) => new Promise<LiveRoomDetail>(res => { pendingDetails.set(id, res); });
+const raceSweep = raceStore.refreshAll(true);
+await flush();
+// Anchor A's old refresh response arrives first while Anchor B is still in flight
+pendingDetails.get('roomA')!(detail('roomA', 100));
+await flush();
+// Before Anchor B finishes, the room page writes Anchor A's newer detail
+const newerA = detail('roomA', 9999);
+newerA.title = 'fresh live title';
+raceStore.updateFromDetail(newerA);
+const snapBeforeChange = raceStore.items[0].toRoomItem();
+assert.equal( raceStore.items[0].toRoomItem(), snapBeforeChange, 'unchanged FollowItem reuses cached LiveRoomItem reference');
+// Now Anchor B finishes and refreshAll commits its batch
+pendingDetails.get('roomB')!(detail('roomB', 500));
+await raceSweep;
+assert.equal(raceStore.items[0].online, 9999, 'stale batch refresh must not overwrite newer updateFromDetail online count');
+assert.equal(raceStore.items[0].title, 'fresh live title', 'stale batch refresh must not overwrite newer updateFromDetail title');
+assert.equal(raceStore.items[1].online, 500, 'other items in the same refreshAll batch still apply normally');
+raceStore.items[0].title = 'updated title';
+const snapAfterChange = raceStore.items[0].toRoomItem();
+assert.notEqual(snapAfterChange, snapBeforeChange, 'changed FollowItem allocates a new LiveRoomItem snapshot');
+assert.equal(snapBeforeChange.title, 'fresh live title', 'previous LiveRoomItem snapshot is never mutated in place');
+assert.equal(snapAfterChange.title, 'updated title');
+setTestPreference(name,'list','[]');const idle=new FollowStore();idle.load({} as never);
+let finishIdle!: (d: LiveRoomDetail) => void;
+Sites.huya.getRoomDetail=()=>new Promise<LiveRoomDetail>(yes=>{finishIdle=yes;});
+let idleRevision=-1;const idleFlags:boolean[]=[];
+idle.subscribe(()=>{if(idle.contentRevision!==idleRevision){idleRevision=idle.contentRevision;if(idle.items[0])idleFlags.push(idle.items[0].snapshot().refreshing);}});
+idle.followAnchor('huya','idle','fixture','',false);
+const idleDetail=new LiveRoomDetail();idleDetail.siteId='huya';idleDetail.roomId='idle';idleDetail.userName='fixture';idleDetail.status=false;
+finishIdle(idleDetail);await flush();
+assert.deepEqual(idleFlags,[false,true,false],'detached presentation observes refresh start/end even when detail content is unchanged');
+const keyed = raceStore.items[0].snapshot();
+const stableRenderKey = keyed.renderKey;
+keyed.detailVersion += 100;
+assert.equal(keyed.renderKey, stableRenderKey, 'identical responses/request epochs must not reconstruct retained rows');
+keyed.online++;
+assert.notEqual(keyed.renderKey, stableRenderKey, 'visible count changes still replace the affected row');
+const beforeState = keyed.renderKey;keyed.state = 2;
+assert.notEqual(keyed.renderKey, beforeState, 'live/offline grouping remains reactive');
+const beforeRefresh = keyed.renderKey;keyed.refreshing = true;
+assert.notEqual(keyed.renderKey, beforeRefresh, 'offline refresh labels remain reactive');
+const frozen = raceStore.items[0].snapshot();
+assert.notEqual(frozen, raceStore.items[0], 'presentation must detach observed store entries, not only the array');
+assert.deepEqual(frozen.toRoomItem(), raceStore.items[0].toRoomItem());
+assert.equal(frozen.detailVersion, raceStore.items[0].detailVersion);
+assert.equal(frozen.addTime, raceStore.items[0].addTime);
+assert.equal(frozen.startTime, raceStore.items[0].startTime);
+const frozenTitle = frozen.title, frozenOnline = frozen.online, frozenState = frozen.state;
+raceStore.items[0].title = 'later hidden update';
+raceStore.items[0].online = 12345;
+raceStore.items[0].state = 2;
+raceStore.items[0].refreshing = true;
+assert.equal(frozen.title, frozenTitle);
+assert.equal(frozen.online, frozenOnline);
+assert.equal(frozen.state, frozenState);
+assert.equal(frozen.refreshing, false);
+const reconciled = raceStore.items[0].snapshot();
+assert.equal(reconciled.title, 'later hidden update', 'reactivation receives current data');
+assert.equal(reconciled.online, 12345);
+assert.equal(reconciled.refreshing, true);
+console.log('FollowStore: revisions, refresh/persistence races, detached hidden presentation and reactivation passed');

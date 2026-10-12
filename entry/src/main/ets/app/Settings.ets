@@ -61,6 +61,7 @@ export class Settings {
   @Trace storageError: string = '';
   private storageListeners: Set<() => void> = new Set<() => void>();
   private accountListeners: Set<() => void> = new Set<() => void>();
+  private themeListeners: Set<() => void> = new Set<() => void>();
   private loading: boolean = false;
 
   subscribeStorage(listener: () => void): void {
@@ -81,6 +82,18 @@ export class Settings {
 
   publishAccount(): void {
     this.accountListeners.forEach((listener: () => void) => listener());
+  }
+
+  subscribeTheme(listener: () => void): void {
+    this.themeListeners.add(listener);
+  }
+
+  unsubscribeTheme(listener: () => void): void {
+    this.themeListeners.delete(listener);
+  }
+
+  publishTheme(): void {
+    this.themeListeners.forEach((listener: () => void) => listener());
   }
 
   private setStorageError(message: string): void {

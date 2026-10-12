@@ -45,11 +45,11 @@ export struct HistoryView {
   }
 
   get cols(): number {
-    return Layout.columns(this.contentW, 236, Space.lg);
+    return Layout.columns(this.contentW, 320, Space.xl);
   }
 
   get cardW(): number {
-    return (this.contentW - Space.lg * (this.cols - 1)) / this.cols;
+    return (this.contentW - Space.xl * (this.cols - 1)) / this.cols;
   }
 
   @Computed
@@ -115,7 +115,7 @@ export struct HistoryView {
   /** Bound each virtual ListItem to one row instead of mounting 200 cards in a day group. */
   @Builder
   dayRow(g: DayGroup, start: number) {
-    Row({ space: Space.lg }) {
+    Row({ space: Space.xl }) {
       ForEach(g.items.slice(start, start + this.cols), (h: HistoryItem, i: number) => {
         Column() {
           Appear({ delay: start + i < 12 ? (start + i) * 30 : 0 }) {

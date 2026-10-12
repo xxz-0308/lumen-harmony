@@ -5,6 +5,7 @@ import { PlayState } from '../../entry/src/main/ets/player/PlayerApi';
 import { isNarrowTheater, showTheaterPanel } from '../../entry/src/main/ets/room/TheaterLayout';
 import { RoomBulletDelivery } from '../../entry/src/main/ets/danmaku/RoomBulletDelivery';
 import { RetainedRoomPlayback } from '../../entry/src/main/ets/app/RetainedRoomPlayback';
+import { SiteSwitch } from '../../entry/src/main/ets/views/SiteSwitch';
 
 // Compile the actual non-UI component methods. Native layout/rendering is checked by the SDK
 // build and device smoke run, not by this fixture. No application method is reimplemented here.
@@ -56,7 +57,7 @@ const clock = new Clock();
 const originalTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 Object.assign(globalThis, { setTimeout: clock.timeout, setInterval: clock.interval, clearTimeout: clock.clear, clearInterval: clock.clear });
 const effects: string[] = [];
-let pops = 0, capture = deferred<any>(), pipStart = deferred<void>();
+let pops = 0, rootHolds = 0, capture = deferred<any>(), pipStart = deferred<void>();
 const settings = { danmakuOn:true, sideChat:true, videoFill:false, theaterPanelOpen:true, volumeMode:'app', appVolume:1, leaveBehavior:'pip', scheduleSave:()=>effects.push('save') };
 let volumeWrite: (value: number) => Promise<boolean> = async () => true;
 const env: any = {
@@ -70,7 +71,8 @@ class Model {
   siteId='huya'; roomId='1'; preview=null; disposals=0;chatActive=true;
   setChatActive(active:boolean){this.chatActive=active;}
   volumeWrites:number[]=[];
-  player={ firstFrame:true, state:2, wantsPlayback:true, pause:()=>{}, setVolume:(v:number)=>this.volumeWrites.push(v) };
+  player={ firstFrame:true, state:2, wantsPlayback:true, videoWidth:1920, videoHeight:1080, pause:()=>{}, setVolume:(v:number)=>this.volumeWrites.push(v) };
+  cancelSwitch(){}
   dispose(){ this.disposals++; this.player.state=0; }
 }
 class Pip {
@@ -87,16 +89,20 @@ class Route { coverW=300; coverH=169; coverX=20; coverY=30; preview=null; }
 try {
   const Page = await logicStruct('../../../entry/src/main/ets/pages/LiveRoomPage.ets', 'LiveRoomPage', '  // ---------- builders ----------', {
     RoomModel:Model, AppEnv:{inst:env}, Settings:{inst:settings}, LivePip:Pip, LiveRouteParam:Route,
+    RoomMount:class{cancel(){}static afterPaint(_context:any,work:()=>void){clock.timeout(work,0);}}, PerfTrace:{run:(_name:string,work:()=>void)=>work()},
     BackgroundAudio:{detach:()=>effects.push('detach'), setMetadata:()=>effects.push('metadata'), update:()=>effects.push('audio')},
     RoomBulletDelivery,RetainedRoomPlayback,PipDanmakuController:class{setVisible(){}setEnabled(){}setStyleVersion(){}dispose(){}},
-    Nav:{stack:{pop:()=>pops++},isLiveOwner:()=>true,popLiveOwner:()=>pops++}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
+    NavigationActivity:{inst:{holdRoot:()=>{rootHolds++;},releaseRoot:()=>{rootHolds--;}}},
+    Nav:{stack:{pop:()=>pops++,getAllPathName:()=>[]},isLiveOwner:()=>true,popLiveOwner:()=>pops++}, Log:{i:()=>{},w:()=>{}}, MediaVolume:{write:(value:number)=>volumeWrite(value)},
     image:{createPixelMapFromSurface:()=>capture.promise}, promptAction:{showToast:()=>effects.push('toast')},
     PlayState, NavigationOperation:{PUSH:1,POP:2},
-    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0}, KeyboardAvoidMode:{RESIZE:2},
+    Radius:{lg:16,xl:24}, Curve:{Friction:0,EaseIn:1,EaseOut:2}, Motion:{smooth:0,snappy:0,hero:0}, KeyboardAvoidMode:{RESIZE:2},
     isNarrowTheater, showTheaterPanel
   });
   const fresh = () => {
     const p = new Page();
+    p.surfaceMounted=p.chromeMounted=p.panelMounted=p.presentationActive=true;
+    p.getUIContext=()=>({});
     p.sourceRoomKey='huya_1';
     p.videoXc={getXComponentSurfaceRect:()=>({surfaceWidth:320,surfaceHeight:180}),getXComponentSurfaceId:()=> 'surface'};
     return p;
@@ -121,6 +127,8 @@ try {
 
   p=fresh(); capture=deferred<any>(); let releases=0;
   p.goBack(); assert.equal(clock.jobs.size,1);
+  assert.equal(p.presentationActive,false,'exit intent parks chat and flying bullets before screenshot work');
+  assert.equal(p.model.chatActive,false);
   p.disposeRoom('navigation');
   assert.equal(p.videoXc,null);
   capture.resolve({release:()=>releases++}); await flush(); clock.advance(500);
@@ -135,14 +143,20 @@ try {
   assert.equal(p.morphPixel,pixel,'resource cleanup preserves the visible return snapshot');
   const transition=p.roomTransition(2,false);
   assert.equal(p.morphOn,true,'return animation still runs after willDisappear cleanup');
+  const releasedBeforeMorph=releases;
   transition[0].onTransitionEnd();
   assert.equal(p.morphPixel,null);
+  assert.equal(releases,releasedBeforeMorph,'the last frame remains pinned through Image removal');
+  clock.advance(0);await flush();assert.equal(releases,releasedBeforeMorph+1,'last-frame PixelMap is explicitly released after paint');
 
   p=fresh(); capture=deferred<any>(); p.goBack(); clock.advance(150);
   assert.equal(pops,2,'slow screenshots retain the original 150ms return deadline');
   capture.resolve({release:()=>releases++}); await flush();
   assert.equal(pops,2,'a late screenshot does not issue a second pop');
   p.disposeRoom('component');
+  p=fresh();p.model.roomId='switched-room';capture=deferred<any>();const beforeFallback=pops;
+  p.goBack();await flush();assert.equal(pops,beforeFallback+1,'switched-room fade does not wait for a screenshot it cannot use');
+  assert.equal(clock.jobs.size,0);p.disposeRoom('component');
   p=fresh(); pipStart=deferred<void>(); p.startPip(); p.disposeRoom('component');
   const toasts=effects.filter(e=>e==='toast').length;
   pipStart.reject(new Error('late failure')); await flush();
@@ -208,13 +222,16 @@ try {
   const followState={items:[] as any[],contentRevision:0,refreshing:false,refreshFailures:0,storageError:'',saveError:'',lastRefreshAt:0,
     subscribe:()=>{},unsubscribe:()=>{},refreshAll:()=>{}};
   const Follow=await logicStruct('../../../entry/src/main/ets/views/FollowView.ets','FollowView','  get contentW(): number',{
-    FollowStore:{inst:followState}
+    FollowStore:{inst:followState},NavigationActivity:{inst:{rootActive:true}},AppEnv:{inst:{foreground:true}}
   });
   const followView=new Follow();followView.aboutToAppear();const followSnapshot=followView.snapshot;
   followState.refreshing=true;followState.saveError='fixture error';followView.syncFollows();
   assert.equal(followView.snapshot,followSnapshot);assert.equal(followView.refreshing,true);assert.equal(followView.saveError,'fixture error');
-  followView.active=false;followState.items=[{}];followState.contentRevision++;followView.syncFollows();
+  followView.active=false;followState.items=[{snapshot:()=>({key:'fixture'})}];followState.contentRevision++;followView.syncFollows();
   assert.equal(followView.snapshot,followSnapshot);followView.active=true;followView.onActive();assert.equal(followView.snapshot.length,1);
+  const beforeNavSnapshot=followView.snapshot;followView.navActivity.rootActive=false;followView.onActive();
+  followState.contentRevision++;followView.syncFollows();assert.equal(followView.snapshot,beforeNavSnapshot,'navigation directly freezes a retained FollowView with an unchanged active Param');
+  followView.navActivity.rootActive=true;followView.onActive();assert.notEqual(followView.snapshot,beforeNavSnapshot);
   followView.aboutToDisappear();const detachedSnapshot=followView.snapshot;followState.contentRevision++;followView.syncFollows();
   assert.equal(followView.snapshot,detachedSnapshot);
 
@@ -232,39 +249,65 @@ try {
   glow.strength=0;glow.src='C';glow.onSrc();assert.deepEqual(glowLoads,['A','B']);
   glow.strength=1;glow.onSrc();glow.aboutToDisappear();glowTasks.get('C')!.resolve({});await flush();assert.equal(glow.front,sharedGlow);
   const categorySettings={categorySite:'huya',scheduleSave:()=>{}};
-  const categoryEnv={reduceMotion:false};
-  class ListScroller {
-    y=0;limit=1000;indexes:number[]=[];
-    currentOffset(){return{yOffset:this.y,xOffset:0};}
-    scrollTo(options:{yOffset:number}){this.y=Math.min(options.yOffset,this.limit);}
-    scrollToIndex(index:number){this.indexes.push(index);}
-  }
-  const categories={groups:[{id:'section',name:'fixture',children:[]}],loading:false};
+  const categoryEnv={reduceMotion:false,winWidth:1280};
+  const ensuredSites:string[]=[];
   const Category=await logicStruct('../../../entry/src/main/ets/views/CategoryView.ets','CategoryView','  @Builder\n  trailing()',{
-    Settings:{inst:categorySettings},AppEnv:{inst:categoryEnv},ListScroller,
-    Sites:{ids:['huya','douyu','bilibili']},CategoryStore:{favorites:()=>[],of:()=>categories,ensure:()=>{},subscribeFavorites:()=>{},unsubscribeFavorites:()=>{}},
-    Section:class{key='';title='';items=[];},FAV_KEY:'__fav__',Curve:{EaseIn:0},Motion:{snappy:0},ScrollAlign:{START:0}
+    Settings:{inst:categorySettings},AppEnv:{inst:categoryEnv},Layout:{isCompact:(w:number)=>w<600},
+    Sites:{ids:['huya','douyu','bilibili']},CategoryStore:{favorites:()=>[],ensure:(id:string)=>{ensuredSites.push(id);},subscribeFavorites:()=>{},unsubscribeFavorites:()=>{}},
+    Motion:{snappy:0},SiteSwitch
   });
   const completions:(()=>void)[]=[];
   const freshCategory=()=>{const view=new Category();view.getUIContext=()=>({animateTo:(options:any,change:()=>void)=>{
     if(options.onFinish)completions.push(options.onFinish);change();
-  }});view.aboutToAppear();view.listReady=true;view.listY=321;view.scroller.y=321;return view;};
-  let category=freshCategory();category.selectSite(1);category.selectSite(2);
-  assert.equal(category.selectedSite,'bilibili');assert.equal(categorySettings.categorySite,'bilibili');
-  completions[0]();assert.equal(category.site,'huya');completions[1]();assert.equal(category.site,'bilibili');
-  category.scroller.limit=128;clock.advance(0);assert.equal(category.scroller.y,128);assert.equal(category.listY,128);
-  assert.deepEqual(category.scroller.indexes,[],'platform switches do not scroll to a fixed index');
+  }});view.aboutToAppear();return view;};
+  let category=freshCategory();
+  assert.deepEqual(ensuredSites,['huya']);
+  assert.deepEqual(category.visitedSites,['huya'],'initial CategoryView mounts only the active site pane');
+  assert.equal(category.siteOffset('huya'),0);assert.equal(category.siteOffset('douyu'),28);assert.equal(category.siteOffset('bilibili'),28);
+  category.selectSite(1);category.selectSite(2);
+  assert.equal(category.site,'bilibili');assert.equal(categorySettings.categorySite,'bilibili');
+  assert.deepEqual(category.drawnSites,['huya','douyu','bilibili']);
+  assert.deepEqual(category.visitedSites,['huya','douyu','bilibili']);
+  completions[0]();assert.deepEqual(category.drawnSites,['huya','douyu','bilibili'],'stale animation completion cannot hide newer site pane');
+  completions[1]();assert.deepEqual(category.drawnSites,['bilibili']);
   completions.length=0;categorySettings.categorySite='huya';category=freshCategory();
   category.selectSite(1);const cancelled=completions[0];category.selectSite(0);cancelled();
-  assert.equal(category.site,'huya');assert.equal(category.contentX,0);assert.equal(category.contentFade,1);
-  category.selectSite(1);const backgrounded=completions.at(-1)!;category.active=false;category.onActive();backgrounded();
-  assert.equal(category.site,'douyu');assert.equal(category.contentFade,1);
-  category.active=true;category.onActive();category.listReady=true;category.alignWhenReady();clock.advance(0);
-  assert.equal(category.scroller.y,321,'accepted selection resumes with the shared current offset');
-  category.pendingY=600;category.alignWhenReady();category.jump(0);clock.advance(0);assert.equal(category.pendingY,-1);
-  category.selectSite(2);const departed=completions.at(-1)!;category.aboutToDisappear();departed();assert.equal(category.site,'douyu');
-  categoryEnv.reduceMotion=true;categorySettings.categorySite='huya';category=freshCategory();category.selectSite(2);clock.advance(0);
-  assert.equal(category.site,'bilibili');assert.equal(category.contentFade,1);category.aboutToDisappear();
+  assert.equal(category.site,'huya');assert.deepEqual(category.drawnSites,['huya','douyu']);
+  completions[1]();assert.deepEqual(category.drawnSites,['huya']);
+  category.onHorizontalSwipe({offsetX:-80,offsetY:10});
+  assert.equal(category.site,'douyu');
+  const backgrounded=completions.at(-1)!;category.active=false;category.onActive();backgrounded();
+  assert.equal(category.site,'douyu');assert.deepEqual(category.drawnSites,['douyu']);
+  category.active=true;category.onActive();
+  category.selectSite(2);const departed=completions.at(-1)!;category.aboutToDisappear();departed();assert.equal(category.site,'bilibili');
+  categoryEnv.reduceMotion=true;categorySettings.categorySite='huya';category=freshCategory();category.selectSite(2);
+  assert.equal(category.site,'bilibili');assert.deepEqual(category.drawnSites,['bilibili']);category.aboutToDisappear();
+
+  const spinEnv={foreground:true,reduceMotion:false};
+  const SpinBtn=await logicStruct('../../../entry/src/main/ets/views/FollowView.ets','RefreshIconButton','  build() {',{
+    AppEnv:{inst:spinEnv}
+  });
+  const spin=new SpinBtn();spin.refreshing=true;spin.active=true;spin.aboutToAppear();
+  assert.equal(spin.spinning,true);assert.equal(clock.jobs.size,1,'active refreshing icon schedules one spin timer');
+  spin.active=false;spin.onSpinState();
+  assert.equal(spin.spinning,false);assert.equal(clock.jobs.size,0,'hiding FollowView immediately stops RefreshIconButton timer');
+  spin.active=true;spin.onSpinState();assert.equal(clock.jobs.size,1);
+  spinEnv.foreground=false;spin.onSpinState();assert.equal(clock.jobs.size,0,'backgrounding immediately stops RefreshIconButton timer');
+  spinEnv.foreground=true;spin.onSpinState();assert.equal(clock.jobs.size,1);
+  spin.refreshing=false;spin.onSpinState();assert.equal(clock.jobs.size,0,'finishing refresh immediately stops RefreshIconButton timer');
+  spin.aboutToDisappear();
+
+  const fsEnters:number[]=[];let fsExits=0;let fsTask=deferred<void>();
+  env.enterVideoFullscreen=(aspect:number)=>{fsEnters.push(aspect);return fsTask.promise;};
+  env.exitVideoFullscreen=async()=>{fsExits++;};
+  p=fresh();p.getUIContext=()=>({animateTo:(_options:any,change:()=>void)=>change()});p.armHide=()=>{};
+  p.setFullscreen(true);assert.equal(p.fullscreenTarget,true);assert.equal(p.fullscreen,false);
+  assert.deepEqual(fsEnters,[16/9],'LiveRoomPage wires enterVideoFullscreen with player aspect ratio');
+  fsTask.resolve();await flush();assert.equal(p.fullscreen,true);
+  p.onBack();assert.equal(p.fullscreen,false);assert.equal(p.fullscreenTarget,false);assert.equal(fsExits,1);
+  fsTask=deferred<void>();p.setFullscreen(true);p.onBack();fsTask.resolve();await flush();
+  assert.equal(p.fullscreen,false,'cancelling fullscreen while enterVideoFullscreen is in-flight prevents late fullscreen UI');
+  env.enterVideoFullscreen=async()=>{};env.exitVideoFullscreen=async()=>{};
 
   p=fresh();let dismissals=0;p.getUIContext=()=>({animateTo:(_options:any,change:()=>void)=>change()});p.armHide=()=>dismissals++;
   p.sheet='quality';p.toggleControls();assert.equal(p.sheet,'');assert.equal(dismissals,1);
@@ -313,6 +356,8 @@ try {
     RoomModel:Model,XComponentController:class{}
   });
   const video=new Video();const receiver=()=>{};video.model.onBullet=receiver;
+  video.model.player.notice='preparing fixture';video.onNotice();assert.ok(video.noticeTimer>=0);
+  video.model.player.notice='';video.onNotice();assert.equal(video.noticeText,'');assert.equal(video.noticeTimer,-1,'completed/cancelled preparation clears its notice timer immediately');
   let unbound=0;video.onDanmaku=(engine:any)=>{if(engine===null)unbound++;};video.aboutToDisappear();
   assert.equal(unbound,1);assert.equal(video.model.onBullet,receiver,'video presentation cannot replace the session-owned bullet receiver');
   let canvasStops=0,canvasClears=0;
@@ -343,14 +388,47 @@ try {
   p.pipShown=false;p.restoreMainDanmaku();p.bullets.push('restored fixture',0xffffff);
   assert.equal(restoredBullets,1,'PiP return explicitly reattaches the SDK-cached main Canvas even without onReady');
   p.disposeRoom('navigation');
+  p=fresh();const heldBefore=rootHolds;
+  p.holdRootPresentation();p.holdRootPresentation();assert.equal(rootHolds,heldBefore+1,'Back and willDisappear share one root hold');
+  p.releaseRootPresentation();p.releaseRootPresentation();assert.equal(rootHolds,heldBefore+1,'root reconciliation waits outside the animation callback');
+  clock.advance(0);assert.equal(rootHolds,heldBefore,'hidden/cached and disappeared callbacks release exactly once');
+  p.aboutToDisappear();clock.advance(0);assert.equal(rootHolds,heldBefore);
+  p=fresh();p.returnAnimating=true;p.holdRootPresentation();const visualReturn=p.roomTransition(2,false);
+  p.aboutToDisappear();clock.advance(0);assert.equal(rootHolds,heldBefore+1,'early SDK component removal cannot wake root during the visual return');
+  for(const stage of visualReturn)stage.onTransitionEnd?.();clock.advance(0);
+  assert.equal(rootHolds,heldBefore,'visual completion releases the hold once, including SDK-cached destinations');
+  for(const reason of ['pipHandoff','sleepPopIssued']){
+    p=fresh();p.returnAnimating=true;p.holdRootPresentation();p[reason]=true;
+    assert.equal(p.roomTransition(2,false),undefined,'nonanimated handoffs do not start a return-cover animation');
+    clock.advance(0);assert.equal(rootHolds,heldBefore,'nonanimated exit also releases a pending return hold');
+  }
   const rootEnv={foreground:true};let rootRefreshes=0;
   const rootFollows={lastRefreshAt:Date.now(),refreshAll:()=>{rootRefreshes++;rootFollows.lastRefreshAt=Date.now();}};
   const Root=await logicStruct('../../../entry/src/main/ets/pages/Index.ets','Index','  private select(',{
-    Settings:{inst:{startPage:'home'}},AppEnv:{inst:rootEnv},FollowStore:{inst:rootFollows},hasHdsTabs:()=>false
+    Settings:{inst:{startPage:'home',subscribeTheme:()=>{},unsubscribeTheme:()=>{}}},AppEnv:{inst:rootEnv},FollowStore:{inst:rootFollows},hasHdsTabs:()=>false,
+    NavigationActivity:{inst:{rootActive:true}}
   });
   const root=new Root();root.aboutToAppear();assert.equal(rootRefreshes,0,'fresh root does not start a redundant sweep');
-  root.rootShown=false;root.onRootActivity();clock.advance(10*60*1000);assert.equal(rootRefreshes,0,'covered root skips repeated periodic refresh');
-  rootFollows.lastRefreshAt=Date.now()-6*60*1000;root.rootShown=true;root.onRootActivity();assert.equal(rootRefreshes,1,'stale root reconciles once when visible');
+  const indexSrc=readFileSync(new URL('../../../entry/src/main/ets/pages/Index.ets',import.meta.url),'utf-8');
+  const tabsSrc=readFileSync(new URL('../../../entry/src/main/ets/components/MainTabs.ets',import.meta.url),'utf-8');
+  assert.equal(indexSrc.includes('onBeforeColorMode'),false,'Index does not shrink visited tabs on color mode change');
+  assert.equal(tabsSrc.includes('ForEach([this.themeKey]'),false,'MainTabs updates theme in place without rebuilding HdsTabs');
+  const histStore={items:[] as any[],storageError:'',saveError:'',subscribe:()=>{},unsubscribe:()=>{}};
+  const mineSettings={accountError:'',biliExpired:false,biliUid:0,biliName:'',subscribeAccount:()=>{},unsubscribeAccount:()=>{}};
+  const Mine=await logicStruct('../../../entry/src/main/ets/views/MineView.ets','MineView','  get contentW(): number',{
+    AppEnv:{inst:{winWidth:1280}},HistoryStore:{inst:histStore},Settings:{inst:mineSettings}
+  });
+  const mine=new Mine();mine.active=false;mine.aboutToAppear();
+  histStore.items=[{key:'h1'}];mineSettings.biliUid=123;mineSettings.biliName='tester';
+  mine.syncHistory();mine.syncAccount();
+  assert.equal(mine.recent.length,0,'hidden MineView skips history snapshot updates');
+  assert.equal(mine.accountLabel,'','hidden MineView skips account snapshot updates');
+  mine.active=true;mine.onActive();
+  assert.equal(mine.recent.length,1,'activating MineView reconciles recent history');
+  assert.equal(mine.accountLabel,'哔哩哔哩 · tester','activating MineView reconciles account label');
+  mine.aboutToDisappear();
+  root.navActivity.rootActive=false;root.onRootActivity();clock.advance(10*60*1000);assert.equal(rootRefreshes,0,'covered root skips repeated periodic refresh');
+  rootFollows.lastRefreshAt=Date.now()-6*60*1000;root.navActivity.rootActive=true;root.onRootActivity();assert.equal(rootRefreshes,1,'stale root reconciles once when visible');
   root.onRootActivity();assert.equal(rootRefreshes,1);clock.advance(5*60*1000);assert.equal(rootRefreshes,2,'visible root retains the five-minute periodic cadence');
   rootEnv.foreground=false;clock.advance(5*60*1000);assert.equal(rootRefreshes,2);
   root.aboutToDisappear();rootEnv.foreground=true;rootFollows.lastRefreshAt=0;root.onRootActivity();clock.advance(5*60*1000);

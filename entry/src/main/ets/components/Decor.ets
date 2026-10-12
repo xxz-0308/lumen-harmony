@@ -235,17 +235,13 @@ export struct FilterChip {
         Text(this.label)
           .fontSize(13)
           .fontWeight(this.selected ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(this.selected ? C.accent : C.text2)
+          .fontColor(this.selected ? C.onAccent : C.text2)
       }
     }
-    .height(44)
+    .height(40)
     .padding({ left: 16, right: 16 })
     .borderRadius(Radius.pill)
-    // Frosted chips; the selected one is lit and outlined in the accent colour.
-    .backgroundColor(this.selected ? C.glassPill : C.glassTint)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-    .borderWidth(this.selected ? 1 : 0.5)
-    .borderColor(this.selected ? C.accent : C.glassStroke)
+    .backgroundColor(this.selected ? C.accent : C.surface2)
     .shadow(this.selected ? { radius: 10, color: '#1F000000', offsetY: 2 } : { radius: 0, color: Color.Transparent })
     .animation({ duration: AppEnv.inst.reduceMotion ? 0 : 200, curve: Curve.EaseOut })
     .accessibilitySelected(this.selected)
